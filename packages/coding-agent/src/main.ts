@@ -616,6 +616,8 @@ async function promptForMissingSessionCwd(
 
 export interface MainOptions {
 	extensionFactories?: InlineExtension[];
+	/** Default interaction layer when the caller does not pick one with `--ui`. */
+	ui?: "pi" | "euler";
 }
 
 export async function main(args: string[], options?: MainOptions) {
@@ -679,6 +681,12 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 
 	const parsed = parseArgs(args);
+	parsed.ui ??= options?.ui;
+	if (parsed.ui === "euler") {
+		// Euler's cursor and selection model lives in the alternate screen; there is no sensible
+		// regular-mode fallback, so the mode is forced instead of silently degrading.
+		parsed.tuiMode = "fullscreen";
+	}
 	if (parsed.diagnostics.length > 0) {
 		for (const d of parsed.diagnostics) {
 			const color = d.type === "error" ? chalk.red : chalk.yellow;
@@ -1017,6 +1025,7 @@ export async function main(args: string[], options?: MainOptions) {
 			initialMessages: parsed.messages,
 			verbose: parsed.verbose,
 			tuiMode: parsed.tuiMode,
+			ui: parsed.ui,
 			initialThemeSetting: parsed.useTheme,
 		});
 		if (startupBenchmark) {

@@ -1,0 +1,50 @@
+{
+	"$comment": "Contract between euler and upstream pi. The gate fails when upstream changes something euler patches or depends on.",
+	"upstream": {
+		"repo": "earendil-works/pi",
+		"remote": "upstream",
+		"branch": "main",
+		"baseTag": "v1.5.0"
+	},
+	"patched": [
+		"packages/tui/src/tui-alt-screen.ts",
+		"packages/tui/src/index.ts",
+		"packages/coding-agent/src/main.ts",
+		"packages/coding-agent/src/cli.ts",
+		"packages/coding-agent/src/cli/args.ts",
+		"packages/coding-agent/package.json",
+		"packages/coding-agent/src/modes/interactive/interactive-mode.ts",
+		"packages/coding-agent/src/modes/interactive/chat-viewport.ts"
+	],
+	"signatures": [
+		{ "file": "packages/coding-agent/src/core/agent-session-runtime.ts", "contains": "async fork(" },
+		{ "file": "packages/coding-agent/src/core/session-manager.ts", "contains": "appendCustomMessageEntry" },
+		{ "file": "packages/coding-agent/src/core/session-manager.ts", "contains": "createBranchedSession" },
+		{ "file": "packages/coding-agent/src/core/session-manager.ts", "contains": "getHeader" },
+		{ "file": "packages/coding-agent/src/core/agent-session.ts", "contains": "getUserMessagesForForking" },
+		{ "file": "packages/coding-agent/src/core/messages.ts", "contains": "createCustomMessage" },
+		{ "file": "packages/tui/src/layout.ts", "contains": "scrollContentLines" },
+		{ "file": "packages/tui/src/layout.ts", "contains": "getScrollViewBox" },
+		{ "file": "packages/tui/src/tui.ts", "contains": "addInputListener" },
+		{ "file": "packages/tui/src/tui.ts", "contains": "showOverlay" }
+	],
+	"exports": [
+		{
+			"file": "packages/coding-agent/src/modes/interactive/components/index.ts",
+			"symbols": ["UserMessageComponent", "ToolExecutionComponent", "AssistantMessageComponent"]
+		},
+		{
+			"file": "packages/coding-agent/src/core/session-manager.ts",
+			"symbols": ["SessionManager"]
+		},
+		{
+			"file": "packages/coding-agent/src/modes/interactive/theme/theme.ts",
+			"symbols": ["getMarkdownTheme", "Theme"]
+		}
+	],
+	"contractTests": [
+		"packages/coding-agent/test/euler-mode.test.ts",
+		"packages/coding-agent/test/euler-motions.test.ts",
+		"packages/tui/test/keyboard-selection.test.ts"
+	]
+}

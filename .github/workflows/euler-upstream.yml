@@ -1,0 +1,106 @@
+name: euler upstream gate
+
+on:
+  schedule:
+    # Monday 06:00 UTC: surfaces drift before it becomes a surprise merge.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      base:
+        description: "Upstream ref to check (default: upstream/main)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Add upstream remote
+        run: git remote add upstream https://github.com/earendil-works/pi
+
+      - name: Run gate
+        id: gate
+        continue-on-error: true
+        run: |
+          set +e
+          node tools/euler/upstream-gate.mjs ${{ github.event.inputs.base && format('--base {0}', github.event.inputs.base) || '' }}
+          echo "status=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Contract tests on merged tree
+        id: contracts
+        continue-on-error: true
+        run: |
+          git fetch --depth=1 origin
+          git config user.email "euler-gate@users.noreply.github.com"
+          git config user.name "euler gate"
+          if git merge --no-edit upstream/main; then
+            npm ci
+            npx vitest run packages/coding-agent/test/euler-mode.test.ts packages/coding-agent/test/euler-motions.test.ts
+            echo "status=$?" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=1" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: upstream-gate
+          path: .artifacts/upstream-gate.json
+          if-no-files-found: warn
+
+      - name: Open or update drift issue
+        if: steps.gate.outputs.status != '0' || steps.contracts.outputs.status != '0'
+        uses: actions/github-script@v7
+        env:
+          GATE_STATUS: ${{ steps.gate.outputs.status }}
+          CONTRACT_STATUS: ${{ steps.contracts.outputs.status }}
+        with:
+          script: |
+            const fs = require("node:fs");
+            const report = fs.existsSync(".artifacts/upstream-gate.json")
+              ? JSON.parse(fs.readFileSync(".artifacts/upstream-gate.json", "utf8"))
+              : { status: "unknown" };
+            const title = "upstream drift: pi main";
+            const body = [
+              `Gate exit: ${process.env.GATE_STATUS} · contract tests exit: ${process.env.CONTRACT_STATUS}`,
+              "",
+              "```json",
+              JSON.stringify(report, null, 2).slice(0, 20000),
+              "```",
+              "",
+              "Port the seams in `tools/euler/seams.json`, then run `npm run euler:gate` and the contract tests.",
+            ].join("\n");
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "open",
+              labels: "euler-upstream",
+            });
+            if (existing.data.some((issue) => issue.title === title)) {
+              const issue = existing.data.find((candidate) => candidate.title === title);
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ["euler-upstream"],
+              });
+            }

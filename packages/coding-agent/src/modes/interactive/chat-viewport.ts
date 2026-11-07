@@ -8,6 +8,8 @@ export interface ChatViewportOptions {
 	readonly footer: Component;
 	readonly widgetsAbove?: Component;
 	readonly widgetsBelow?: Component;
+	/** Pinned one-line bar under the dock (euler's modal statusline). */
+	readonly statusLine?: Component;
 	readonly scrollbar?: ScrollViewScrollbar;
 	readonly scrollbarTrackStyle?: (text: string) => string;
 	readonly scrollbarThumbStyle?: (text: string) => string;
@@ -41,6 +43,9 @@ export function createChatViewport(options: ChatViewportOptions): ChatViewport {
 		root: new VStack([
 			{ component: transcript, basis: 0, grow: 1, shrink: 1, minSize: 1 },
 			{ component: dock, basis: "auto", grow: 0, shrink: 1, minSize: 1 },
+			...(options.statusLine === undefined
+				? []
+				: [{ component: options.statusLine, basis: "auto" as const, grow: 0, shrink: 0, minSize: 0 }]),
 		]),
 	};
 }

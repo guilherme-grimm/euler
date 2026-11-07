@@ -49,6 +49,7 @@ export interface Args {
 	listModels?: string | true;
 	offline?: boolean;
 	tuiMode?: TuiMode;
+	ui?: "pi" | "euler";
 	verbose?: boolean;
 	projectTrustOverride?: boolean;
 	messages: string[];
@@ -221,6 +222,20 @@ export function parseArgs(args: string[]): Args {
 				result.listModels = args[++i];
 			} else {
 				result.listModels = true;
+			}
+		} else if (arg === "--ui") {
+			const ui = args[i + 1];
+			if (ui === "pi" || ui === "euler") {
+				result.ui = ui;
+				i++;
+			} else if (ui === undefined || ui.startsWith("-")) {
+				result.diagnostics.push({ type: "error", message: "--ui requires pi or euler" });
+			} else {
+				i++;
+				result.diagnostics.push({
+					type: "error",
+					message: `Invalid UI "${ui}". Valid values: pi, euler`,
+				});
 			}
 		} else if (arg === "--tui-mode") {
 			const mode = args[i + 1];

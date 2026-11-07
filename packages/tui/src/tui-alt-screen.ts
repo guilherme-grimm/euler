@@ -105,6 +105,37 @@ interface SelectionRange {
 	end: SelectionPoint;
 }
 
+/** A content-space point inside a scroll view: line index, cell column. */
+export interface ViewportKeyboardPoint {
+	row: number;
+	col: number;
+}
+
+/**
+ * Keyboard-owned cursor and selection state for a scroll view.
+ *
+ * Rows are content lines (not screen rows) so scrolling and streaming do not move the
+ * cursor underneath the user. Euler drives this; the mouse selection path is independent.
+ */
+export interface ViewportKeyboardState {
+	scrollView: ScrollView;
+	cursor: ViewportKeyboardPoint;
+	anchor?: ViewportKeyboardPoint;
+	linewise?: boolean;
+}
+
+/** Rendered transcript content plus the geometry needed to map it onto the screen. */
+export interface ViewportTextSnapshot {
+	/** Content lines of the scroll view, still carrying ANSI styling. */
+	lines: readonly string[];
+	/** Content row currently shown as the first visible row. */
+	top: number;
+	/** Number of visible rows. */
+	height: number;
+	/** Rendered content width in cells. */
+	width: number;
+}
+
 type SelectionGranularity = "character" | "word" | "line";
 
 interface ClickTarget {
@@ -218,6 +249,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	private readonly uploadedKittyImages = new Map<number, CachedKittyImage>();
 	private selectionAnchor?: SelectionPoint;
 	private selectionFocus?: SelectionPoint;
+	private keyboardState?: ViewportKeyboardState;
 	private selectionGranularity: SelectionGranularity = "character";
 	private selectionInitialRange?: SelectionRange;
 	private lastClick?: ClickTarget;
@@ -312,6 +344,42 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		const text = this.getActiveSelectionText();
 		if (!text) return false;
 		return this.copyTextToClipboard(text);
+	}
+
+	/** Set (or clear) the keyboard cursor/selection rendered over a scroll view. */
+	setKeyboardState(state: ViewportKeyboardState | undefined): void {
+		this.keyboardState = state;
+		this.requestRender();
+	}
+
+	getKeyboardState(): ViewportKeyboardState | undefined {
+		return this.keyboardState;
+	}
+
+	/** Rendered content of a scroll view, for hosts that implement their own navigation. */
+	getViewportSnapshot(scrollView?: ScrollView): ViewportTextSnapshot | undefined {
+		const layout = this.currentLayout;
+		const view = scrollView ?? this.getPrimaryScrollView();
+		if (!layout || !view) return undefined;
+		const box = getScrollViewBox(layout, view);
+		if (!box?.scrollContentLines) return undefined;
+		return { lines: box.scrollContentLines, top: view.scrollTop, height: view.viewportHeight, width: box.rect.width };
+	}
+
+	/** Text of the current keyboard selection, or the cursor character when nothing is selected. */
+	getKeyboardSelectionText(): string | undefined {
+		const range = this.keyboardRange();
+		if (range) return this.getRangeText(range);
+		const state = this.keyboardState;
+		if (!state) return undefined;
+		const line = this.getRenderedContentLine(state.scrollView, state.cursor.row);
+		if (!line) return undefined;
+		const columns = this.getSelectionColumns(line, state.cursor.row, {
+			start: { ...state.cursor, scrollView: state.scrollView },
+			end: { ...state.cursor, scrollView: state.scrollView },
+		});
+		const text = stripTerminalSequences(sliceByColumn(line, columns.start, 1, true));
+		return text.length > 0 ? text : undefined;
 	}
 
 	/** Drop the text selection and multi-click history, e.g. before the host replaces the transcript. */
@@ -1452,7 +1520,41 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 
 	private getActiveSelectionText(): string | undefined {
 		const selection = this.getSelectionBounds();
-		if (!selection) return undefined;
+		return selection ? this.getRangeText(selection) : undefined;
+	}
+
+	/** Content line for a keyboard state's scroll view, resolved through the last layout. */
+	private getRenderedContentLine(scrollView: ScrollView, row: number): string | undefined {
+		if (!this.currentLayout) return undefined;
+		const box = getScrollViewBox(this.currentLayout, scrollView);
+		return box?.scrollContentLines?.[row];
+	}
+
+	/** Keyboard selection as a content-space range, expanding to whole lines in linewise mode. */
+	private keyboardRange(): SelectionRange | undefined {
+		const state = this.keyboardState;
+		const anchor = state?.anchor;
+		if (!state || !anchor) return undefined;
+		if (anchor.row === state.cursor.row && anchor.col === state.cursor.col) return undefined;
+		const anchorBefore =
+			anchor.row < state.cursor.row || (anchor.row === state.cursor.row && anchor.col <= state.cursor.col);
+		const earlier = anchorBefore ? anchor : state.cursor;
+		const later = anchorBefore ? state.cursor : anchor;
+		if (state.linewise) {
+			return {
+				start: { row: earlier.row, col: 0, scrollView: state.scrollView, boundary: true },
+				end: { row: later.row, col: Number.MAX_SAFE_INTEGER, scrollView: state.scrollView, boundary: true },
+			};
+		}
+		// Start is exclusive of the cell boundary, end is inclusive: vim's visual selection covers
+		// the grapheme under the cursor on both ends, whichever direction the selection grew.
+		return {
+			start: { row: earlier.row, col: earlier.col, scrollView: state.scrollView, boundary: true },
+			end: { row: later.row, col: later.col, scrollView: state.scrollView, boundary: false },
+		};
+	}
+
+	private getRangeText(selection: SelectionRange): string | undefined {
 		let sourceLines: readonly string[] = this.previousScreen;
 		if (selection.start.scrollView) {
 			if (!this.currentLayout) return undefined;
@@ -1601,7 +1703,34 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 
 	private applySelection(screen: string[], layout = this.currentLayout): string[] {
 		const selection = this.getSelectionBounds();
-		if (!selection) return screen;
+		return selection ? this.applyRangeHighlight(screen, layout, selection) : screen;
+	}
+
+	/** Paint the keyboard cursor cell and any keyboard selection over the rendered frame. */
+	private applyKeyboardHighlight(screen: string[], layout = this.currentLayout): string[] {
+		const state = this.keyboardState;
+		if (!state || !layout) return screen;
+		const box = getScrollViewBox(layout, state.scrollView);
+		if (!box?.scrollContentLines) return screen;
+		const range = this.keyboardRange();
+		const withSelection = range ? this.applyRangeHighlight(screen, layout, range) : screen;
+		if (range) return withSelection;
+		return withSelection.map((line, row) => {
+			const screenRow = box.rect.y + state.cursor.row - state.scrollView.scrollTop;
+			if (row !== screenRow || isImageLine(line)) return line;
+			if (row < box.clip.y || row >= box.clip.y + box.clip.height) return line;
+			const lineWidth = visibleWidth(line);
+			const minColumn = Math.max(0, box.rect.x, box.clip.x);
+			const maxColumn = Math.min(this.terminal.columns, box.rect.x + box.rect.width, box.clip.x + box.clip.width);
+			const column = Math.min(maxColumn - 1, Math.max(minColumn, box.rect.x + state.cursor.col));
+			const before = sliceByColumn(line, 0, column, true);
+			const cell = sliceByColumn(line, column, 1, true);
+			const after = sliceByColumn(line, column + 1, Math.max(0, lineWidth - column - 1), true);
+			return `${before}\x1b[7m${cell.length > 0 ? cell : " "}\x1b[27m${after}`;
+		});
+	}
+
+	private applyRangeHighlight(screen: string[], layout: LayoutFrame | undefined, selection: SelectionRange): string[] {
 		let screenSelection = selection;
 		let minRow = 0;
 		let maxRow = screen.length - 1;
@@ -1706,6 +1835,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		screen = this.compositeOverlays(screen, width, height);
 		if (screen.length > height) screen = screen.slice(screen.length - height);
 		screen = this.applySelection(screen, nextLayout);
+		screen = this.applyKeyboardHighlight(screen, nextLayout);
 		screen = this.compositeFlashes(screen, width, height);
 
 		const cursorPos = this.extractCursorPosition(screen, height);

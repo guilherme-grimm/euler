@@ -136,6 +136,8 @@ import { loadAllHighlightLanguages } from "../../utils/syntax-highlight.ts";
 import { stripBom } from "../../utils/text.ts";
 import { ensureTool, type ToolStatus } from "../../utils/tools-manager.ts";
 import { checkForNewPiVersion, type LatestPiRelease } from "../../utils/version-check.ts";
+import { type EulerHost, EulerMode, type EulerPrompt } from "../euler/euler-mode.ts";
+import { EulerStatusLine } from "../euler/euler-status.ts";
 import { reportBug } from "./bug-report.ts";
 import { createChatViewport } from "./chat-viewport.ts";
 import { ArminComponent } from "./components/armin.ts";
@@ -448,6 +450,8 @@ export interface InteractiveModeOptions {
 	verbose?: boolean;
 	/** TUI layout mode. */
 	tuiMode?: TuiMode;
+	/** Interaction layer. `euler` adds modal vim navigation over the fullscreen transcript. */
+	ui?: "pi" | "euler";
 	/** Initial interactive theme setting for this invocation. */
 	initialThemeSetting?: string;
 	/** Terminal implementation. Defaults to the current process terminal. */
@@ -469,6 +473,8 @@ export class InteractiveMode {
 	private chatContainer: Container;
 	private documentContainer: Container;
 	private transcriptScrollView: TuiLayouts.ScrollView | undefined;
+	private eulerMode: EulerMode | undefined;
+	private eulerStatusLine: EulerStatusLine | undefined;
 	private fullscreenLayoutRoot: Component | undefined;
 	private pendingMessagesContainer: Container;
 	private statusContainer: Container;
@@ -929,6 +935,10 @@ export class InteractiveMode {
 	}
 
 	private switchTuiMode(mode: TuiMode, restoreProgress = true, startRenderer = true): boolean {
+		if (this.eulerEnabled() && mode !== "fullscreen") {
+			this.showWarning("euler requires the fullscreen viewport");
+			return false;
+		}
 		const previousUi = this.renderer;
 		if (mode === previousUi.mode) return true;
 		if (previousUi.hasOverlayEntries) return false;
@@ -1007,6 +1017,7 @@ export class InteractiveMode {
 			editor: this.editorContainer,
 			widgetsBelow: this.widgetContainerBelow,
 			footer: this.footerContainer,
+			statusLine: this.eulerEnabled() ? this.getEulerStatusLine() : undefined,
 			scrollbar: this.settingsManager.getFullscreenScrollbar(),
 			scrollbarTrackStyle: (text) => theme.fg("scrollbarTrack", text),
 			scrollbarThumbStyle: (text) => theme.fg("scrollbarThumb", text),
@@ -1027,6 +1038,7 @@ export class InteractiveMode {
 		this.defaultEditor.onCtrlD = () => this.handleCtrlD();
 		this.defaultEditor.onSubmit = (text) => this.handleStartupSubmit(text);
 		this.ui.setFocus(this.editor);
+		this.attachEulerMode();
 
 		// Start the UI before initializing extensions so session_start handlers can use interactive dialogs
 		this.ui.start();
@@ -7242,7 +7254,128 @@ export class InteractiveMode {
 		}
 	}
 
+	private eulerEnabled(): boolean {
+		return this.options.ui === "euler";
+	}
+
+	private getEulerStatusLine(): EulerStatusLine {
+		if (!this.eulerStatusLine) {
+			this.eulerStatusLine = new EulerStatusLine(() => {
+				const mode = this.eulerMode;
+				if (mode) return mode.statusData();
+				return {
+					mode: "insert" as const,
+					line: 0,
+					total: 0,
+					sessionName: this.currentSessionLabel(),
+					parent: this.parentSessionLabel(),
+					streaming: this.session.isStreaming,
+				};
+			});
+		}
+		return this.eulerStatusLine;
+	}
+
+	private currentSessionLabel(): string {
+		const name = this.sessionManager.getSessionName();
+		if (name) return name;
+		if (!this.sessionManager.getSessionFile()) return "new session";
+		return `session ${this.sessionManager.getSessionId().slice(0, 8)}`;
+	}
+
+	private parentSessionLabel(): string | undefined {
+		const parent = this.sessionManager.getHeader()?.parentSession;
+		if (!parent) return undefined;
+		const id = path.basename(parent, ".jsonl");
+		const parts = id.split("_");
+		return parts.at(-1)?.slice(0, 8) ?? id.slice(0, 8);
+	}
+
+	/** User prompts on the active branch, oldest first, used for prompt-matched rewinds. */
+	private branchPrompts(): EulerPrompt[] {
+		const prompts: EulerPrompt[] = [];
+		for (const entry of this.sessionManager.getBranch()) {
+			if (entry.type !== "message" || entry.message.role !== "user") continue;
+			const content = entry.message.content;
+			const text =
+				typeof content === "string"
+					? content
+					: content
+							.filter((block): block is { type: "text"; text: string } => block.type === "text")
+							.map((block) => block.text)
+							.join("\n");
+			if (text.trim().length > 0) prompts.push({ entryId: entry.id, text });
+		}
+		return prompts;
+	}
+
+	private attachEulerMode(): void {
+		if (!this.eulerEnabled()) return;
+		if (!(this.renderer instanceof TuiAltScreen) || !this.transcriptScrollView) {
+			this.showWarning("euler requires the fullscreen viewport");
+			return;
+		}
+		this.detachEulerMode();
+		const transcript = this.transcriptScrollView;
+		const host: EulerHost = {
+			ui: this.ui,
+			renderer: this.renderer,
+			transcript,
+			forkAtLeaf: async () => {
+				const leafId = this.sessionManager.getLeafId();
+				if (!leafId) throw new Error("Nothing to fork yet");
+				const result = await this.runtimeHost.fork(leafId, { position: "at" });
+				if (result.cancelled) return;
+				this.editor.setText("");
+				this.showStatus("Forked thread: same context, new session");
+			},
+			forkBeforePrompt: async (prompt) => {
+				const result = await this.runtimeHost.fork(prompt.entryId);
+				if (result.cancelled) return;
+				this.editor.setText(result.selectedText ?? "");
+				this.showStatus("Forked before prompt");
+			},
+			prompts: () => this.branchPrompts(),
+			addQuote: (text, details) => {
+				const entryId = this.sessionManager.appendCustomMessageEntry("quote", text, true, details);
+				this.addMessageToChat(createCustomMessage("quote", text, true, details, new Date().toISOString()));
+				this.ui.requestRender();
+				void entryId;
+			},
+			copy: async (text) => {
+				try {
+					await copyToClipboard(text);
+					return true;
+				} catch {
+					return false;
+				}
+			},
+			openSessions: () => this.showSessionSelector(),
+			openTree: () => this.showTreeSelector(),
+			focusEditor: () => {
+				this.ui.setFocus(this.editor);
+				this.updateEditorBorderColor();
+			},
+			blurEditor: () => {
+				this.ui.setFocus(null);
+			},
+			showStatus: (text) => this.showStatus(text),
+			showError: (text) => this.showError(text),
+			isStreaming: () => this.session.isStreaming,
+			sessionName: () => this.currentSessionLabel(),
+			parentName: () => this.parentSessionLabel(),
+		};
+		this.eulerMode = new EulerMode(host);
+		this.eulerMode.attach();
+	}
+
+	private detachEulerMode(): void {
+		this.eulerMode?.dispose();
+		this.eulerMode = undefined;
+	}
+
 	stop(fullscreenExitOutput = this.settingsManager.getFullscreenExitOutput()): void {
+		this.detachEulerMode();
 		this.disposeActiveSelector();
 		if (this.settingsManager.getShowTerminalProgress()) {
 			this.ui.terminal.setProgress(false);

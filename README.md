@@ -12,6 +12,11 @@
 
 # Pi
 
+> **euler fork:** this repository is a fork of pi that adds a modal, vim-flavoured interaction
+> layer (`pi --ui euler`, or the `euler` binary). See [docs/euler](docs/euler/README.md) for keys,
+> the fork/quote model, the architecture seams, and the upstream update gate. Everything below
+> still describes upstream pi.
+
 Pi is a minimal, extensible agent harness that you can make your own.
 
 Adapt Pi to your workflows, not the other way around. Customize Pi with [extensions](packages/coding-agent/docs/extensions.md), [skills](packages/coding-agent/docs/skills.md), [prompt templates](packages/coding-agent/docs/prompt-templates.md), and [themes](packages/coding-agent/docs/themes.md). Bundle them as [Pi packages](packages/coding-agent/docs/packages.md) and share via npm or git.
