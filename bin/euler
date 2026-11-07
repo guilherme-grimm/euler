@@ -1,0 +1,26 @@
+#!/bin/sh
+# euler launcher: prefers bun (same bundle, roughly 2.5x faster startup on TypeScript-heavy
+# extension setups), falls back to node. Set EULER_RUNTIME=node to force node.
+set -eu
+
+self=$0
+if command -v readlink >/dev/null 2>&1; then
+	# Resolve symlinks so `ln -s .../bin/euler ~/.local/bin/euler` works.
+	resolved=$(readlink -f -- "$self" 2>/dev/null || true)
+	if [ -n "${resolved:-}" ]; then
+		self=$resolved
+	fi
+fi
+root=$(CDPATH= cd -- "$(dirname -- "$self")/.." && pwd)
+cli="$root/packages/coding-agent/dist/bundle/cli.js"
+
+if [ ! -f "$cli" ]; then
+	echo "euler: $cli is missing. Run 'npm run build' in $root first." >&2
+	exit 1
+fi
+
+runtime=${EULER_RUNTIME:-auto}
+if [ "$runtime" != "node" ] && command -v bun >/dev/null 2>&1; then
+	EULER=1 exec bun "$cli" "$@"
+fi
+EULER=1 exec node "$cli" "$@"

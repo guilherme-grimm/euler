@@ -15,14 +15,19 @@ npm run build                       # builds every package and the CLI bundle
 node packages/coding-agent/dist/bundle/cli.js --ui euler
 ```
 
-The `euler` name comes from the binary or from the environment:
+Link the launcher, which prefers `bun` and falls back to `node`:
 
 ```bash
-ln -s "$PWD/packages/coding-agent/dist/bundle/cli.js" ~/.local/bin/euler
-euler                    # equivalent to: pi --ui euler
-EULER=1 pi               # same thing without the symlink
+ln -s "$PWD/bin/euler" ~/.local/bin/euler
+euler                    # equivalent to: pi --ui euler, run under bun when available
+EULER_RUNTIME=node euler # force node
+EULER=1 pi               # same thing without the launcher
 pi --ui euler            # explicit
 ```
+
+Bun starts this configuration in ~250 ms vs ~620 ms on node (TypeScript extensions compile
+natively instead of going through `jiti`); see [PERFORMANCE.md](PERFORMANCE.md). The bundle is
+identical, so this is a runtime choice, not a build change.
 
 Euler always uses the alternate-screen viewport. `--tui-mode regular` is rejected because the
 cursor and selection model need the fullscreen layout.
@@ -64,6 +69,10 @@ same table that dispatches keys — `packages/coding-agent/src/modes/euler/keyma
 
 `Esc` in normal mode never types: it clears a pending operator or count, and otherwise does
 nothing unless a turn is streaming, in which case it reaches pi's abort handler.
+
+Keys are decoded through pi's `decodePrintableKey`, so terminals in the Kitty keyboard protocol
+(space arrives as `\x1b[32u`, `?` as `\x1b[47:63;2u`) work the same as plain-byte terminals.
+Euler also hides pi's "↓ Jump to latest message" pill: `G` already goes to the end.
 
 ## Model
 

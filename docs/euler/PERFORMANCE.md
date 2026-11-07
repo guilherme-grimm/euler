@@ -57,10 +57,11 @@ under 2 ms and reading one row stays fast, so the eager path can't come back sil
 
 ## npm vs bun (evaluation, not switched)
 
-**Runtime: switch-able today.** `bun packages/coding-agent/dist/bundle/cli.js --ui euler` works
-with the same bundle, same sessions, same extensions. Gains ~370 ms of startup on this config and
-~12 MB of RSS. Upstream also ships a `bun build --compile` binary path (`npm run build:binary`),
-so a standalone `euler` binary is a supported direction rather than a fork.
+**Runtime: done.** `bin/euler` runs the bundle under bun when bun is on `PATH`, otherwise node
+(`EULER_RUNTIME=node` forces node). Same bundle, same sessions, same extensions; measured ~370 ms
+less startup and ~12 MB less RSS on this config. Verified end to end, including Kitty CSI-u key
+decoding under bun. Upstream also ships a `bun build --compile` binary path
+(`npm run build:binary`) if a standalone `euler` binary is wanted later.
 
 **Package manager: later, and only with a trial.** Reasons not to flip `npm` → `bun install` yet:
 
@@ -73,8 +74,7 @@ so a standalone `euler` binary is a supported direction rather than a fork.
 
 Suggested order if we pursue it:
 
-1. Ship the bun **runtime** by default for euler (wrapper script or compiled binary), keep node
-   as the fallback. Zero risk to the build.
+1. ~~Ship the bun runtime by default for euler.~~ Done: `bin/euler`.
 2. Trial `bun install` on a branch, diff the resulting tree, keep `vitest` (it runs fine under
    `bun run`), and validate `install-lock` regeneration.
 3. Only then decide on the lockfile. If it happens, do it as its own `chore:` commit — never

@@ -13,6 +13,8 @@ export interface InteractiveTuiOptions {
 	readonly onRightClickPaste?: () => void;
 	readonly fullscreenCopyOnSelect?: boolean;
 	readonly fullscreenWheelScrollLines?: WheelScrollLines;
+	/** Show pi's "jump to latest message" pill when scrolled up. Euler hides it in favour of `G`. */
+	readonly scrollToEndIndicator?: boolean;
 }
 
 /** Composition root shared by coding-agent presentations. */
@@ -27,11 +29,14 @@ export function createInteractiveTui(options: InteractiveTuiOptions): TuiMainScr
 			searchMatchStyle: (text) => theme.underline(styleSearchMatch(text)),
 			searchCurrentMatchStyle: (text) => theme.bold(theme.inverse(styleSearchMatch(text))),
 			searchNavigationButtonStyle: (text, hovered) => (hovered ? theme.underline(text) : text),
-			scrollToEndIndicator: () => {
-				const shortcut = keyDisplayText("tui.altScreen.bottom");
-				const label = ` ↓ Jump to latest message${shortcut ? ` · ${shortcut}` : ""} `;
-				return theme.bg("selectedBg", theme.fg("text", label));
-			},
+			scrollToEndIndicator:
+				options.scrollToEndIndicator === false
+					? undefined
+					: () => {
+							const shortcut = keyDisplayText("tui.altScreen.bottom");
+							const label = ` ↓ Jump to latest message${shortcut ? ` · ${shortcut}` : ""} `;
+							return theme.bg("selectedBg", theme.fg("text", label));
+						},
 			openUrl: openBrowser,
 			onRightClickPaste: options.onRightClickPaste,
 			copyOnSelect: options.fullscreenCopyOnSelect,

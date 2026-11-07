@@ -5,7 +5,7 @@
  * cannot exist in the UI without existing in the engine (or the other way around).
  */
 
-import { matchesKey } from "@earendil-works/pi-tui";
+import { decodePrintableKey, matchesKey } from "@earendil-works/pi-tui";
 
 export type EulerModeName = "normal" | "visual" | "insert" | "search";
 
@@ -144,13 +144,22 @@ export function displayKeys(keys: string): string {
 		.join("");
 }
 
-/** Canonical token for a raw input chunk, or undefined for keys the engine ignores. */
+/**
+ * Canonical token for a raw input chunk, or undefined for keys the engine ignores.
+ *
+ * Terminals in the Kitty keyboard protocol send printable keys as CSI-u sequences (space is
+ * `\x1b[32u`, `?` is `\x1b[47:63;2u`), so raw single-byte checks are not enough. The same
+ * helper the editor uses decodes those, and the plain-byte path keeps terminals without the
+ * protocol working.
+ */
 export function canonicalKey(data: string): string | undefined {
-	if (data === " ") return "space";
 	for (const special of SPECIAL_KEYS) {
 		if (matchesKey(data, special)) return special;
 	}
-	if (data.length === 1 && data >= " " && data !== "\x7f") return data;
+	const printable = decodePrintableKey(data) ?? (data.length === 1 ? data : undefined);
+	if (printable === undefined) return undefined;
+	if (printable === " ") return "space";
+	if (printable.length === 1 && printable >= " " && printable !== "\x7f") return printable;
 	return undefined;
 }
 

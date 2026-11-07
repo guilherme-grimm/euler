@@ -3,6 +3,7 @@ import { ScrollView, TuiAltScreen } from "@earendil-works/pi-tui";
 import { afterEach, describe, it } from "vitest";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
 import { type EulerHost, EulerMode, type EulerPrompt } from "../src/modes/euler/euler-mode.ts";
+import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
 const TRANSCRIPT = [
 	" > refactor the auth module",
@@ -75,6 +76,9 @@ function setup() {
 }
 
 const created: Array<{ tui: TuiAltScreen; mode: EulerMode }> = [];
+
+// The cheatsheet renders through the real theme.
+initTheme("dark");
 
 afterEach(() => {
 	while (created.length > 0) {
@@ -291,5 +295,38 @@ describe("EulerMode", () => {
 		assert.ok(doc.text(100).includes("buildContextEntries"));
 		assert.ok(doc.lastCol(100) > 0);
 		assert.ok(performance.now() - read < 5);
+	});
+
+	it("decodes Kitty CSI-u printable keys (space, ?)", async () => {
+		const { terminal, tui, recorded, mode } = setup();
+		await settle(terminal);
+		terminal.sendInput("\x1b");
+		terminal.sendInput("\x1b[32u"); // space
+		await settle(terminal);
+		assert.equal(mode.statusData().pending, "<space>");
+		assert.ok(mode.statusData().hint?.includes("s previous conversations"));
+
+		terminal.sendInput("\x1b[115u"); // s
+		await settle(terminal);
+		assert.deepEqual(recorded.opened, ["sessions"]);
+
+		terminal.sendInput("\x1b[47:63;2u"); // shift+/ = ?
+		await settle(terminal);
+		assert.equal(tui.hasOverlayEntries, true);
+		terminal.sendInput("x");
+		await settle(terminal);
+		assert.equal(tui.hasOverlayEntries, false);
+	});
+
+	it("decodes shifted letters from CSI-u as their uppercase binding", async () => {
+		const { terminal, tui } = setup();
+		await settle(terminal);
+		terminal.sendInput("\x1b");
+		terminal.sendInput("\x1b[103;2u"); // shift+g = G
+		await settle(terminal);
+		assert.equal(tui.getKeyboardState()?.cursor.row, TRANSCRIPT.length - 1);
+		terminal.sendInput("\x1b[103u"); // plain g starts the gg prefix
+		await settle(terminal);
+		assert.equal(tui.hasOverlayEntries, false);
 	});
 });
