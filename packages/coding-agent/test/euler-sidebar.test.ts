@@ -1,7 +1,13 @@
 import assert from "node:assert";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, it } from "vitest";
-import { EulerSidebar, orderThreads, relativeAge, type SidebarSnapshot } from "../src/modes/euler/euler-sidebar.ts";
+import {
+	EulerSidebar,
+	orderThreads,
+	relativeAge,
+	type SidebarSnapshot,
+	type SidebarThread,
+} from "../src/modes/euler/euler-sidebar.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
 initTheme("dark");
@@ -145,5 +151,41 @@ describe("euler sidebar", () => {
 		);
 		for (const line of plain) assert.ok(visibleWidth(line) <= 28, `overflow: ${line}`);
 		assert.equal(plain.length, 20, "rail fills the viewport height");
+	});
+
+	it("shows only the last week by default and searches all history", () => {
+		const { sidebar, snapshot } = setup();
+		// Everything in the fixture is inside the window.
+		assert.equal(sidebar.rows().length, 4);
+
+		const old = new Date(Date.now() - 40 * 86_400_000);
+		(snapshot.threads as SidebarThread[]).push({
+			path: "/s/ancient.jsonl",
+			title: "ancient thread",
+			modified: old,
+			messageCount: 3,
+		});
+		assert.equal(sidebar.rows().length, 4, "old thread hidden by default");
+		assert.ok(sidebar.render(30).some((line) => stripTerminalSequences(line).includes("+1 older")));
+
+		sidebar.handleInput("/");
+		assert.equal(sidebar.rows().length, 5, "search covers all history");
+		for (const char of "anci") sidebar.handleInput(char);
+		assert.equal(sidebar.rows().length, 1);
+		assert.equal(sidebar.rows()[0]?.title, "ancient thread");
+
+		sidebar.handleInput("\x1b");
+		assert.equal(sidebar.rows().length, 5, "escape clears the query, keeps searching");
+		sidebar.handleInput("\x1b");
+		assert.equal(sidebar.rows().length, 4, "second escape leaves search");
+	});
+
+	it("backspace narrows the search query", () => {
+		const { sidebar } = setup();
+		sidebar.handleInput("/");
+		for (const char of "refq") sidebar.handleInput(char);
+		assert.equal(sidebar.rows().length, 0);
+		sidebar.handleInput("\x7f");
+		assert.equal(sidebar.rows().length, 1);
 	});
 });

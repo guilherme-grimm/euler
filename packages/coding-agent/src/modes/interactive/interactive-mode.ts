@@ -285,6 +285,9 @@ type CompactionCostNotice = {
 	usage: Usage;
 };
 
+/** Threads older than this are treated as read and hidden from the default rail view. */
+const EULER_UNREAD_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
 type RenderSessionItem = AgentMessage | Extract<SessionEntry, { type: "custom" | "usage" }> | CompactionCostNotice;
 
 function isCustomSessionEntry(item: RenderSessionItem): item is Extract<SessionEntry, { type: "custom" }> {
@@ -7468,8 +7471,14 @@ export class InteractiveMode {
 					parentPath: session.parentSessionPath,
 					modified: session.modified,
 					messageCount: session.messageCount,
+					// Unread means "changed since you last opened it": sessions you never opened are just
+					// history, and anything older than a week counts as read. Otherwise months of tabs
+					// all scream at once.
 					unread:
-						session.path !== currentPath && session.modified.getTime() > (this.eulerSeen.get(session.path) ?? 0),
+						session.path !== currentPath &&
+						this.eulerSeen.has(session.path) &&
+						session.modified.getTime() > (this.eulerSeen.get(session.path) ?? 0) &&
+						Date.now() - session.modified.getTime() <= EULER_UNREAD_WINDOW_MS,
 				}));
 
 				// The live session is not on disk until its first turn finishes; keep it in the rail
@@ -7595,6 +7604,9 @@ export class InteractiveMode {
 			leaveSidebar: () => this.leaveEulerSidebar(),
 			flash: (message) => {
 				if (this.renderer instanceof TuiAltScreen) this.renderer.flash(message);
+			},
+			quit: () => {
+				void this.shutdown();
 			},
 		};
 		this.ensureEulerSidebar();

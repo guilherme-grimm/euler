@@ -9,7 +9,7 @@
 import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { type ThemeBg, type ThemeColor, theme } from "../interactive/theme/theme.ts";
 
-export type EulerModeName = "normal" | "visual" | "insert" | "search";
+export type EulerModeName = "normal" | "visual" | "insert" | "search" | "command";
 
 export interface EulerStatusData {
 	mode: EulerModeName;
@@ -31,6 +31,7 @@ const MODE_LABEL: Record<EulerModeName, string> = {
 	visual: "VISUAL",
 	insert: "INSERT",
 	search: "SEARCH",
+	command: "COMMAND",
 };
 
 const MODE_BG: Record<EulerModeName, ThemeBg> = {
@@ -38,6 +39,7 @@ const MODE_BG: Record<EulerModeName, ThemeBg> = {
 	insert: "toolSuccessBg",
 	visual: "customMessageBg",
 	search: "searchMatchBg",
+	command: "toolPendingBg",
 };
 
 const MODE_FG: Record<EulerModeName, ThemeColor> = {
@@ -45,6 +47,7 @@ const MODE_FG: Record<EulerModeName, ThemeColor> = {
 	insert: "text",
 	visual: "text",
 	search: "text",
+	command: "text",
 };
 
 export class EulerStatusLine implements Component {

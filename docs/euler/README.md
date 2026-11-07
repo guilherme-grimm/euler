@@ -61,8 +61,9 @@ normal mode; `i` returns to insert.
 | normal | `<space>s` | session picker (previous conversations) |
 | normal | `<space>t` | session tree navigator |
 | normal | `<space>f` | fork |
-| normal | `<space>h` or `?` | cheatsheet |
-| normal | `i` | back to insert (editor) |
+| normal | `<space>h` or `?` | cheatsheet (vim-style float) |
+| normal | `i` / `A` | back to insert (editor) |
+| normal | `:` | command line (`:q`, `:help`) |
 | normal | `Esc` | clear pending prefix/count, or abort a streaming turn |
 
 ### Sidebar
@@ -76,16 +77,20 @@ first turn is written to disk.
 |---|---|
 | `◉` | current session with a turn in flight |
 | `●` | current session (idle) |
-| `◆` | unread: modified since you last opened it |
+| `◆` | changed since you last opened it (recent only; never-opened threads are plain history) |
 | `·` | never used (no messages yet) |
 | `○` | read |
 
-Read state is persisted in `~/.pi/agent/euler-seen.json` (path → last opened). Opening a thread
-marks it read; the rail is not polled, it refreshes on open, after forks and after switching.
+The default view is the working set: threads touched in the **last week**; the header shows
+`· +N older` for the rest. `/` switches to search, which covers all history and filters as you
+type (`↑`/`↓` move, `Enter` opens, `Esc` clears then leaves). Read state is persisted in
+`~/.pi/agent/euler-seen.json` (path → last opened). The rail is not polled: it refreshes on open,
+after forks, and after switching.
 
 | key (rail focused) | action |
 |---|---|
 | `j` `k`, `Ctrl-d` `Ctrl-u`, `gg` `G` | move the selection |
+| `/` | search all history (type to filter) |
 | `Enter` | open that thread (or hide the rail when it is already current) |
 | `n` / `r` | new session / reload the list |
 | `Ctrl-l` | back to the transcript, rail stays open (`Ctrl-h` returns) |

@@ -79,6 +79,9 @@ function setup() {
 		flash: (message) => {
 			recorded.flashes.push(message);
 		},
+		quit: () => {
+			recorded.opened.push("quit");
+		},
 		focusEditor: () => {},
 		blurEditor: () => {},
 		showStatus: () => {},
@@ -422,5 +425,36 @@ describe("EulerMode", () => {
 		terminal.sendInput("\x0c");
 		await settle(terminal);
 		assert.deepEqual(recorded.opened, ["showSidebar", "leaveSidebar"]);
+	});
+
+	it("enters insert with A and quits from the command line", async () => {
+		const { terminal, recorded, mode } = setup();
+		await settle(terminal);
+		terminal.sendInput("\x1b");
+		terminal.sendInput("A");
+		await settle(terminal);
+		assert.equal(mode.statusData().mode, "insert");
+
+		terminal.sendInput("\x1b");
+		terminal.sendInput(":");
+		await settle(terminal);
+		assert.equal(mode.statusData().mode, "command");
+		terminal.sendInput("q");
+		terminal.sendInput("\r");
+		await settle(terminal);
+		assert.deepEqual(recorded.opened, ["quit"]);
+	});
+
+	it("reports unknown commands instead of doing something", async () => {
+		const { terminal, mode, recorded } = setup();
+		await settle(terminal);
+		terminal.sendInput("\x1b");
+		terminal.sendInput(":");
+		await settle(terminal);
+		terminal.sendInput("wq2");
+		terminal.sendInput("\r");
+		await settle(terminal);
+		assert.ok(mode.statusData().message?.startsWith("not a command"));
+		assert.equal(recorded.opened.length, 0);
 	});
 });

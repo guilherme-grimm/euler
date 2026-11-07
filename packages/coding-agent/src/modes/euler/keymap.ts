@@ -54,6 +54,7 @@ export type EulerAction =
 	| "sessions"
 	| "tree"
 	| "sidebar"
+	| "command"
 	| "focusSidebar"
 	| "focusTranscript";
 
@@ -134,6 +135,8 @@ export const KEYMAP: readonly KeymapEntry[] = [
 
 	// mode switches
 	{ keys: "i", modes: NORMAL, group: "mode", desc: "insert (editor)", action: "insert" },
+	{ keys: "A", modes: NORMAL, group: "mode", desc: "insert (editor)", action: "insert" },
+	{ keys: ":", modes: NORMAL, group: "mode", desc: "command line (:q to quit)", action: "command" },
 	{ keys: "?", modes: BOTH, group: "mode", desc: "cheatsheet", action: "help" },
 ] as const;
 

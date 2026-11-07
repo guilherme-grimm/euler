@@ -19,6 +19,7 @@ import {
 	Text,
 	type TUI,
 	type TuiAltScreen,
+	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import { theme } from "../interactive/theme/theme.ts";
@@ -82,6 +83,8 @@ export interface EulerHost {
 	leaveSidebar(): void;
 	/** Transient confirmation in the alt-screen flash stack. */
 	flash(message: string): void;
+	/** Leave the application (`:q`). */
+	quit(): void;
 	focusEditor(): void;
 	blurEditor(): void;
 	showStatus(text: string): void;
@@ -268,7 +271,8 @@ export class EulerMode {
 			action !== "sidebar" &&
 			action !== "focusSidebar" &&
 			action !== "focusTranscript" &&
-			action !== "insert"
+			action !== "insert" &&
+			action !== "command"
 		) {
 			this.message = "no transcript yet";
 			return;
@@ -403,6 +407,9 @@ export class EulerMode {
 				return;
 			case "insert":
 				this.enterInsert();
+				return;
+			case "command":
+				this.openCommand();
 				return;
 			case "sessions":
 				this.host.openSessions();
@@ -655,6 +662,44 @@ export class EulerMode {
 		return best?.prompt;
 	}
 
+	/** `:` command line, vim-style: `:q` quits, `:help` opens the cheatsheet. */
+	private openCommand(): void {
+		const input = new Input({ prompt: ":", placeholder: "q · help" });
+		const box = new Box(1, 0, (text) => theme.bg("selectedBg", text));
+		box.addChild(input);
+		input.onSubmit = (value) => {
+			this.closeOverlay();
+			this.runCommand(value.trim());
+		};
+		input.onEscape = () => this.closeOverlay();
+		this.overlay = this.host.ui.showOverlay(box, { anchor: "bottom-left", width: "60%", offsetY: -3 });
+		this.host.ui.setFocus(input);
+		this.mode = "command";
+		this.host.ui.requestRender();
+	}
+
+	private runCommand(raw: string): void {
+		const command = raw.replace(/^\s*:?\s*/, "");
+		switch (command) {
+			case "":
+				return;
+			case "q":
+			case "q!":
+			case "quit":
+			case "qa":
+			case "wq":
+			case "x":
+				this.host.quit();
+				return;
+			case "help":
+				this.showHelp();
+				return;
+			default:
+				this.message = `not a command: :${command}`;
+				this.syncCursor();
+		}
+	}
+
 	private openSearch(): void {
 		const input = new Input({ prompt: "/", placeholder: "search transcript" });
 		const box = new Box(1, 0, (text) => theme.bg("selectedBg", text));
@@ -719,7 +764,7 @@ export class EulerMode {
 		this.syncCursor();
 	}
 
-	/** `?`: the cheatsheet, generated from the same table that dispatches keys. */
+	/** `?`: a vim-style floating cheatsheet, generated from the keymap table. */
 	private showHelp(): void {
 		const terminalWidth = this.host.ui.terminal.columns;
 		const terminalHeight = this.host.ui.terminal.rows;
@@ -734,11 +779,10 @@ export class EulerMode {
 			"",
 		];
 
-		const lines: string[] = [theme.bold(theme.fg("accent", "euler keys")), ""];
+		const content: string[] = [];
 		if (columns === 1) {
-			for (const section of sections) lines.push(...renderSection(section));
+			for (const section of sections) content.push(...renderSection(section));
 		} else {
-			// Greedy balance by whole sections, so a large group like `move` never splits.
 			const columnsData: Array<typeof sections> = [[], []];
 			const heights = [0, 0];
 			for (const section of sections) {
@@ -749,26 +793,37 @@ export class EulerMode {
 			const rendered = columnsData.map((column) => column.flatMap(renderSection));
 			const height = Math.max(...rendered.map((column) => column.length));
 			const gap = 4;
-			const colWidth = Math.floor((Math.min(terminalWidth - 6, 100) - gap) / 2);
+			const colWidth = Math.floor((Math.min(terminalWidth - 12, 100) - gap) / 2);
 			for (let index = 0; index < height; index++) {
 				const left = rendered[0][index] ?? "";
 				const right = rendered[1][index] ?? "";
-				lines.push(`${left}${" ".repeat(Math.max(1, colWidth - visibleWidth(left)))}${right}`.trimEnd());
+				content.push(`${left}${" ".repeat(Math.max(1, colWidth - visibleWidth(left)))}${right}`.trimEnd());
 			}
 		}
 
-		if (lines.length > terminalHeight - 4) lines.length = terminalHeight - 4;
-		lines.push(
-			"",
-			theme.fg("dim", "rail: ◉ live · ● current · ◆ unread · · empty start"),
-			theme.fg("dim", "any key to close"),
-		);
-		const box = new Box(1, 1, (text) => theme.bg("userMessageBg", text));
+		content.push("", theme.fg("dim", "rail: ◉ live · ● current · ◆ unread · · empty start"));
+		content.push(theme.fg("dim", "press any key to close"));
+
+		// Vim float: rounded frame, title in the top border, body on its own background.
+		const width = Math.min(Math.max(40, terminalWidth - 6), 106);
+		const inner = width - 2;
+		const title = " euler keys ";
+		const topDash = Math.max(1, inner - visibleWidth(title) - 1);
+		const frame = (text: string) => theme.fg("borderAccent", text);
+		const paint = (text: string) => theme.bg("toolPendingBg", text);
+
+		const rows = Math.min(content.length, Math.max(4, terminalHeight - 4));
+		const lines: string[] = [paint(frame(`╭─${title}${"─".repeat(topDash)}╮`))];
+		for (let index = 0; index < rows; index++) {
+			lines.push(paint(`${frame("│")} ${clampLine(content[index] ?? "", inner - 2)} ${frame("│")}`));
+		}
+		lines.push(paint(frame(`╰${"─".repeat(inner)}╯`)));
+
+		const box = new Box(0, 0, (text) => theme.bg("userMessageBg", text));
 		box.addChild(new Text(lines.join("\n"), 0, 0));
-		// An opaque backdrop keeps transcript text from bleeding around the modal.
 		const backdrop: Component = {
-			render: (width: number) =>
-				Array.from({ length: terminalHeight }, () => theme.bg("userMessageBg", " ".repeat(width))),
+			render: (backdropWidth: number) =>
+				Array.from({ length: terminalHeight }, () => theme.bg("userMessageBg", " ".repeat(backdropWidth))),
 			invalidate: () => {},
 		};
 		this.backdrop = this.host.ui.showOverlay(backdrop, {
@@ -777,11 +832,7 @@ export class EulerMode {
 			maxHeight: terminalHeight,
 			nonCapturing: true,
 		});
-		this.overlay = this.host.ui.showOverlay(box, {
-			anchor: "center",
-			width: terminalWidth,
-			maxHeight: terminalHeight,
-		});
+		this.overlay = this.host.ui.showOverlay(box, { anchor: "center", width, maxHeight: terminalHeight });
 		const listener = (data: string) => {
 			// The release of the key that opened the cheatsheet arrives after showOverlay(); closing
 			// on it would make the panel flash for one frame.
@@ -795,6 +846,11 @@ export class EulerMode {
 		};
 		this.host.ui.addInputListener(listener);
 	}
+}
+
+/** Clip and pad to an exact cell width (ANSI aware). */
+function clampLine(text: string, width: number): string {
+	return truncateToWidth(text, width, "…", true);
 }
 
 function firstLine(text: string): string {
