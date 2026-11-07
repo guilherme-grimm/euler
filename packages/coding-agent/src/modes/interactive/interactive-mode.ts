@@ -481,6 +481,8 @@ export class InteractiveMode {
 	private eulerSidebarOpen = false;
 	private eulerSidebarSnapshot: SidebarSnapshot = { threads: [], loading: false };
 	private eulerSidebarRequest = 0;
+	private eulerSeen = new Map<string, number>();
+	private eulerSeenLoaded = false;
 	private fullscreenLayoutRoot: Component | undefined;
 	private pendingMessagesContainer: Container;
 	private statusContainer: Container;
@@ -7330,7 +7332,11 @@ export class InteractiveMode {
 	private ensureEulerSidebar(): EulerSidebar | undefined {
 		if (!this.eulerEnabled()) return undefined;
 		this.eulerSidebar ??= new EulerSidebar({
-			read: () => this.eulerSidebarSnapshot,
+			read: () => ({
+				...this.eulerSidebarSnapshot,
+				currentPath: this.sessionManager.getSessionFile(),
+				live: this.session.isStreaming,
+			}),
 			readHeight: () => this.ui.terminal.rows,
 			onOpen: (sessionPath) => this.openEulerThread(sessionPath),
 			onNew: () => {
@@ -7394,22 +7400,63 @@ export class InteractiveMode {
 
 	private leaveEulerSidebar(): void {
 		if (!this.eulerSidebarOpen) return;
-		this.ui.setFocus(null);
+		this.restoreEulerFocus();
 		this.ui.requestRender();
+	}
+
+	/** Hand focus back to whatever the modal mode expects: the editor while inserting, else the transcript. */
+	private restoreEulerFocus(): void {
+		if (this.eulerMode?.statusData().mode === "insert") this.ui.setFocus(this.editor);
+		else this.ui.setFocus(null);
 	}
 
 	private closeEulerSidebar(): void {
 		if (!this.eulerSidebarOpen) return;
 		this.eulerSidebarOpen = false;
 		this.applyEulerLayout();
-		// Hand focus back to the transcript layer (normal mode) rather than silently typing.
-		this.ui.setFocus(null);
+		this.restoreEulerFocus();
 		this.ui.requestRender();
+	}
+
+	private eulerSeenFile(): string {
+		return path.join(getAgentDir(), "euler-seen.json");
+	}
+
+	private loadEulerSeen(): void {
+		if (this.eulerSeenLoaded) return;
+		this.eulerSeenLoaded = true;
+		try {
+			const raw = JSON.parse(fs.readFileSync(this.eulerSeenFile(), "utf8")) as Record<string, string>;
+			for (const [key, value] of Object.entries(raw)) {
+				const stamp = Date.parse(value);
+				if (Number.isFinite(stamp)) this.eulerSeen.set(key, stamp);
+			}
+		} catch {
+			// First run or unreadable file: everything counts as never opened.
+		}
+	}
+
+	private markEulerSeen(sessionPath: string | undefined): void {
+		if (!sessionPath) return;
+		this.loadEulerSeen();
+		this.eulerSeen.set(sessionPath, Date.now());
+		try {
+			const payload = Object.fromEntries(
+				[...this.eulerSeen].map(([key, value]) => [key, new Date(value).toISOString()]),
+			);
+			fs.writeFileSync(this.eulerSeenFile(), `${JSON.stringify(payload, null, "\t")}\n`);
+		} catch {
+			// Best effort: a read-only agent dir must not break the rail.
+		}
 	}
 
 	/** Load sessions for the rail; token-guarded so a slow scan cannot overwrite a newer one. */
 	private refreshEulerThreads(): void {
 		const request = ++this.eulerSidebarRequest;
+		this.loadEulerSeen();
+		const currentPath = this.sessionManager.getSessionFile();
+		// The thread you are in is read by definition.
+		this.markEulerSeen(currentPath);
 		this.eulerSidebarSnapshot = { ...this.eulerSidebarSnapshot, loading: true };
 		this.ui.requestRender();
 		void SessionManager.list(this.sessionManager.getCwd(), this.sessionManager.getSessionDir())
@@ -7421,11 +7468,43 @@ export class InteractiveMode {
 					parentPath: session.parentSessionPath,
 					modified: session.modified,
 					messageCount: session.messageCount,
+					unread:
+						session.path !== currentPath && session.modified.getTime() > (this.eulerSeen.get(session.path) ?? 0),
 				}));
+
+				// The live session is not on disk until its first turn finishes; keep it in the rail
+				// anyway so the current/live marker has somewhere to land.
+				const currentKey = currentPath ?? "<current>";
+				if (!threads.some((thread) => thread.path === currentPath)) {
+					const branch = this.sessionManager.getBranch();
+					const firstPrompt = branch.find((entry) => entry.type === "message" && entry.message.role === "user");
+					let promptText = "";
+					if (firstPrompt?.type === "message" && firstPrompt.message.role === "user") {
+						promptText =
+							typeof firstPrompt.message.content === "string"
+								? firstPrompt.message.content
+								: firstPrompt.message.content
+										.filter((block) => block.type === "text")
+										.map((block) => (block as { text: string }).text)
+										.join(" ");
+					}
+					threads.unshift({
+						path: currentKey,
+						title:
+							this.sessionManager.getSessionName()?.trim() ||
+							promptText.replace(/\s+/g, " ").trim() ||
+							"current session",
+						modified: new Date(),
+						messageCount: branch.length,
+						unread: false,
+					});
+				}
+
 				this.eulerSidebarSnapshot = {
 					threads,
-					currentPath: this.sessionManager.getSessionFile(),
+					currentPath: currentKey,
 					loading: false,
+					live: this.session.isStreaming,
 				};
 			})
 			.catch(() => {
@@ -7438,6 +7517,11 @@ export class InteractiveMode {
 	}
 
 	private openEulerThread(sessionPath: string): void {
+		if (sessionPath === "<current>") {
+			this.leaveEulerSidebar();
+			return;
+		}
+		this.markEulerSeen(sessionPath);
 		void this.handleResumeSession(sessionPath).finally(() => {
 			this.refreshEulerThreads();
 			if (this.eulerSidebarOpen && this.eulerSidebar) this.ui.setFocus(this.eulerSidebar);
@@ -7509,8 +7593,12 @@ export class InteractiveMode {
 			toggleSidebar: () => this.toggleEulerSidebar(),
 			showSidebar: () => this.showEulerSidebar(),
 			leaveSidebar: () => this.leaveEulerSidebar(),
+			flash: (message) => {
+				if (this.renderer instanceof TuiAltScreen) this.renderer.flash(message);
+			},
 		};
 		this.ensureEulerSidebar();
+		this.markEulerSeen(this.sessionManager.getSessionFile());
 		this.eulerMode = new EulerMode(host);
 		this.eulerMode.attach();
 	}

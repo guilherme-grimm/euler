@@ -1,3 +1,4 @@
+// biome-ignore-all lint/suspicious/noFocusedTests: Focusable requires a field named `focused`.
 /**
  * Left-hand thread rail: every session for this workspace, with forks nested under their parent.
  *
@@ -5,7 +6,7 @@
  * opens, after a session change, and on `r`.
  */
 
-import { type Component, type Focusable, sliceByColumn, visibleWidth } from "@earendil-works/pi-tui";
+import { type Component, type Focusable, sliceByColumn, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { theme } from "../interactive/theme/theme.ts";
 
 export interface SidebarThread {
@@ -15,6 +16,8 @@ export interface SidebarThread {
 	parentPath?: string;
 	modified: Date;
 	messageCount: number;
+	/** Modified after the user last opened it. */
+	unread?: boolean;
 }
 
 export interface SidebarRow extends SidebarThread {
@@ -26,6 +29,8 @@ export interface SidebarSnapshot {
 	threads: readonly SidebarThread[];
 	currentPath?: string;
 	loading: boolean;
+	/** The current session has a turn in flight. */
+	live?: boolean;
 }
 
 export interface SidebarOptions {
@@ -43,8 +48,9 @@ export interface SidebarOptions {
 }
 
 const INDENT = 2;
-const AGE_WIDTH = 3;
-const CHROME_ROWS = 2;
+const AGE_WIDTH = 4;
+/** Header, rule, footer. */
+const CHROME_ROWS = 3;
 
 /** Nest forks under their parent, newest first; orphaned forks fall back to the root level. */
 export function orderThreads(threads: readonly SidebarThread[], currentPath: string | undefined): SidebarRow[] {
@@ -82,12 +88,25 @@ export function orderThreads(threads: readonly SidebarThread[], currentPath: str
 	return rows;
 }
 
+/** Compact age that always fits AGE_WIDTH: 59s, 59m, 23h, 99d, 52w, >9y. */
 export function relativeAge(date: Date, now = Date.now()): string {
 	const seconds = Math.max(0, Math.round((now - date.getTime()) / 1000));
 	if (seconds < 60) return `${seconds}s`;
-	if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
-	if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h`;
-	return `${Math.floor(seconds / 86_400)}d`;
+	const minutes = Math.floor(seconds / 60);
+	if (minutes < 60) return `${minutes}m`;
+	const hours = Math.floor(minutes / 60);
+	if (hours < 24) return `${hours}h`;
+	const days = Math.floor(hours / 24);
+	if (days < 100) return `${days}d`;
+	const weeks = Math.floor(days / 7);
+	if (weeks < 100) return `${weeks}w`;
+	const years = Math.floor(days / 365);
+	return years > 9 ? ">9y" : `${years}y`;
+}
+
+/** Clip/pad to an exact cell width so a line can never spill past the rail. */
+function fit(text: string, width: number): string {
+	return truncateToWidth(text, width, "…", true);
 }
 
 function oneLine(text: string): string {
@@ -186,14 +205,20 @@ export class EulerSidebar implements Component, Focusable {
 		const snapshot = this.options.read();
 		const rows = this.rows();
 		const inner = Math.max(10, width - 1);
-		const totalHeight = Math.max(4, this.options.readHeight());
-		const lines: string[] = [theme.bold(theme.fg("accent", ` threads ${rows.length} `.padEnd(inner)))];
+		const totalHeight = Math.max(6, this.options.readHeight());
+		const border = theme.fg("dim", "│");
+		const ruleColor = this.focused ? "borderAccent" : "borderMuted";
+		const lines: string[] = [];
+
+		// Header + rule: the rail's "winbar", brighter while it owns focus.
+		const header = ` threads ${rows.length} `;
+		lines.push(fit(theme.bold(theme.fg(ruleColor as never, header.padEnd(inner))), inner));
+		lines.push(fit(theme.fg(ruleColor as never, "─".repeat(inner)), inner));
 
 		if (rows.length === 0) {
 			const message = snapshot.loading ? " loading…" : " no sessions yet";
-			lines.push(theme.fg("muted", message.padEnd(inner)));
+			lines.push(fit(theme.fg("muted", message), inner));
 		} else {
-			// Header + hint + padded filler must equal the rail height; the list windows inside it.
 			const viewHeight = Math.max(3, totalHeight - CHROME_ROWS);
 			if (this.selected < this.scrollTop) this.scrollTop = this.selected;
 			if (this.selected >= this.scrollTop + viewHeight) this.scrollTop = this.selected - viewHeight + 1;
@@ -201,31 +226,33 @@ export class EulerSidebar implements Component, Focusable {
 
 			for (let index = this.scrollTop; index < end; index++) {
 				const row = rows[index] as SidebarRow;
-				const marker = row.current ? "●" : "○";
+				const live = row.current && snapshot.live;
+				const marker = live ? "◉" : row.current ? "●" : row.unread ? "◆" : row.messageCount === 0 ? "·" : "○";
+				const glyphColor = live ? "success" : row.current || row.unread ? "accent" : "muted";
 				const connector = row.depth > 0 ? "└ " : "";
 				const indent = " ".repeat(Math.max(0, row.depth - 1) * INDENT);
 				const age = relativeAge(row.modified).padStart(AGE_WIDTH);
-				const prefix = `${connector}${marker} ${indent}`;
-				const titleWidth = Math.max(4, inner - visibleWidth(prefix) - AGE_WIDTH - 2);
+				const prefixWidth = visibleWidth(connector) + visibleWidth(marker) + 1 + visibleWidth(indent);
+				const titleWidth = Math.max(4, inner - prefixWidth - AGE_WIDTH - 1);
 				const title = sliceByColumn(oneLine(row.title), 0, titleWidth, true);
-				const left = `${prefix}${title}`;
-				const gap = " ".repeat(Math.max(1, inner - visibleWidth(left) - AGE_WIDTH));
-				const body = `${left}${gap}${theme.fg("dim", age)}`;
+				const gap = " ".repeat(Math.max(1, inner - prefixWidth - visibleWidth(title) - AGE_WIDTH));
+				const titleColor = row.current || row.unread ? "text" : "muted";
+				const body = `${connector}${theme.fg(glyphColor as never, marker)} ${indent}${theme.fg(titleColor, title)}${gap}${theme.fg("dim", age)}`;
+				const fitted = fit(body, inner);
 				const selected = this.focused && index === this.selected;
-				lines.push(
-					selected
-						? theme.bg("selectedBg", theme.fg("text", body))
-						: theme.fg(row.current ? "text" : "muted", body),
-				);
+				lines.push(selected ? theme.bg("selectedBg", fitted) : fitted);
 			}
 
 			if (rows.length > viewHeight) {
-				lines.push(theme.fg("dim", ` ${this.selected + 1}/${rows.length}`.padEnd(inner)));
+				lines.push(fit(theme.fg("dim", ` ${this.selected + 1}/${rows.length}`), inner));
 			}
 		}
 
 		while (lines.length < totalHeight - 1) lines.push(" ".repeat(inner));
-		lines.push(theme.fg("dim", " j/k move · ⏎ open · n new · e hide ".padEnd(inner)));
-		return lines.map((line) => `${line}${theme.fg("dim", "│")}`);
+		// Longest hint that still fits, so narrow rails stay readable instead of showing "e hi…".
+		const hints = [" j/k move · ⏎ open · n new · e hide", " j/k · ⏎ open · n new · e hide", " j/k · ⏎ · n · e"];
+		const hint = hints.find((candidate) => visibleWidth(candidate) <= inner) ?? " j/k";
+		lines.push(fit(theme.fg("dim", hint), inner));
+		return lines.map((line) => `${line}${border}`);
 	}
 }

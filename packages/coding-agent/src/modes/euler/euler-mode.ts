@@ -80,6 +80,8 @@ export interface EulerHost {
 	showSidebar(): void;
 	/** Return focus to the transcript without closing the rail. */
 	leaveSidebar(): void;
+	/** Transient confirmation in the alt-screen flash stack. */
+	flash(message: string): void;
 	focusEditor(): void;
 	blurEditor(): void;
 	showStatus(text: string): void;
@@ -170,7 +172,12 @@ export class EulerMode {
 		if (this.overlay) return undefined;
 		// Pi renders its selectors (tree, sessions, models, settings) in the editor dock and gives
 		// them focus. Those keys belong to the selector, not to the transcript cursor.
-		if (this.host.hasForeignFocus()) return undefined;
+		if (this.host.hasForeignFocus()) {
+			// Something else owns focus, so we are not really inserting. Dropping back to normal mode
+			// keeps the statusline honest instead of showing INSERT while keys go nowhere.
+			if (this.mode === "insert") this.mode = "normal";
+			return undefined;
+		}
 		// Any keystroke dismisses the previous one-shot status message (including the startup hint).
 		if (this.message) {
 			this.message = "";
@@ -537,6 +544,7 @@ export class EulerMode {
 		}
 		const ok = await this.host.copy(selection.text);
 		this.message = ok ? `yanked ${selection.label}` : "clipboard failed";
+		if (ok) this.host.flash(`Yanked ${selection.label}`);
 		if (this.mode === "visual") this.exitVisual();
 		this.syncCursor();
 	}
@@ -573,6 +581,7 @@ export class EulerMode {
 			createdAt: new Date().toISOString(),
 		});
 		this.message = `quoted ${selection?.label ?? "text"}`;
+		this.host.flash("Quoted into the thread");
 		if (this.mode === "visual") this.exitVisual();
 		this.syncCursor();
 	}
@@ -587,6 +596,7 @@ export class EulerMode {
 			this.host.showError(error instanceof Error ? error.message : String(error));
 		}
 		this.message = "forked";
+		this.host.flash("Forked thread");
 		this.enterNormal();
 	}
 
@@ -748,7 +758,11 @@ export class EulerMode {
 		}
 
 		if (lines.length > terminalHeight - 4) lines.length = terminalHeight - 4;
-		lines.push("", theme.fg("dim", "any key to close"));
+		lines.push(
+			"",
+			theme.fg("dim", "rail: ◉ live · ● current · ◆ unread · · empty start"),
+			theme.fg("dim", "any key to close"),
+		);
 		const box = new Box(1, 1, (text) => theme.bg("userMessageBg", text));
 		box.addChild(new Text(lines.join("\n"), 0, 0));
 		// An opaque backdrop keeps transcript text from bleeding around the modal.

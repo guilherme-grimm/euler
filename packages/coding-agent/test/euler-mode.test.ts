@@ -27,6 +27,7 @@ interface Recorded {
 	forks: string[];
 	rewinds: EulerPrompt[];
 	opened: string[];
+	flashes: string[];
 }
 
 function setup() {
@@ -35,7 +36,7 @@ function setup() {
 	const scroll = new ScrollView({ render: () => TRANSCRIPT, invalidate() {} }, { follow: "end", primary: true });
 	tui.setLayoutRoot(scroll);
 	tui.start();
-	const recorded: Recorded = { quotes: [], copies: [], forks: [], rewinds: [], opened: [] };
+	const recorded: Recorded = { quotes: [], copies: [], forks: [], rewinds: [], opened: [], flashes: [] };
 	const state = { streaming: false };
 	const focus: FocusState = { foreign: false };
 	const prompts: EulerPrompt[] = [
@@ -74,6 +75,9 @@ function setup() {
 		},
 		leaveSidebar: () => {
 			recorded.opened.push("leaveSidebar");
+		},
+		flash: (message) => {
+			recorded.flashes.push(message);
 		},
 		focusEditor: () => {},
 		blurEditor: () => {},

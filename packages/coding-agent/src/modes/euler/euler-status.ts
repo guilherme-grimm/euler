@@ -1,11 +1,13 @@
 /**
- * One-line vim statusline pinned under the chat viewport: mode, position, session, thread lineage.
+ * One-line modal statusline pinned under the chat viewport.
  *
- * The text is produced lazily on render so mode/cursor changes only need a `requestRender()`.
+ * Segmented like a lualine: a filled mode block on the left, dim separators, right-aligned
+ * position/session/linage. The text is produced lazily on render, so mode changes only need a
+ * `requestRender()`.
  */
 
 import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { type ThemeColor, theme } from "../interactive/theme/theme.ts";
+import { type ThemeBg, type ThemeColor, theme } from "../interactive/theme/theme.ts";
 
 export type EulerModeName = "normal" | "visual" | "insert" | "search";
 
@@ -17,7 +19,7 @@ export interface EulerStatusData {
 	/** Name/id of the session this thread was forked from, when there is one. */
 	parent?: string;
 	streaming: boolean;
-	/** Pending count/prefix, e.g. "3j" or "<space>". */
+	/** Pending count/prefix, e.g. "3j". */
 	pending?: string;
 	/** Which-key continuations for the pending prefix. */
 	hint?: string;
@@ -31,6 +33,20 @@ const MODE_LABEL: Record<EulerModeName, string> = {
 	search: "SEARCH",
 };
 
+const MODE_BG: Record<EulerModeName, ThemeBg> = {
+	normal: "userMessageBg",
+	insert: "toolSuccessBg",
+	visual: "customMessageBg",
+	search: "searchMatchBg",
+};
+
+const MODE_FG: Record<EulerModeName, ThemeColor> = {
+	normal: "text",
+	insert: "text",
+	visual: "text",
+	search: "text",
+};
+
 export class EulerStatusLine implements Component {
 	private readonly read: () => EulerStatusData;
 
@@ -42,30 +58,26 @@ export class EulerStatusLine implements Component {
 
 	render(width: number): string[] {
 		const data = this.read();
-		const modeColor: ThemeColor =
-			data.mode === "insert"
-				? "success"
-				: data.mode === "visual"
-					? "warning"
-					: data.mode === "search"
-						? "mdLink"
-						: "accent";
-		const left = theme.bold(theme.fg(modeColor, ` ${MODE_LABEL[data.mode]} `));
-		const parts: string[] = [];
-		parts.push(theme.fg("muted", `${data.line}/${data.total}`));
-		if (data.pending) parts.push(theme.fg("warning", data.pending));
-		if (data.hint) parts.push(theme.fg("dim", data.hint));
-		parts.push(theme.fg("text", data.sessionName));
-		if (data.parent) parts.push(theme.fg("dim", `forked from ${data.parent}`));
-		if (data.streaming) parts.push(theme.fg("warning", "working"));
-		if (data.message) parts.push(theme.fg("muted", data.message));
+		const divider = theme.fg("dim", "│");
+		const pad = theme.fg("dim", " ");
 
-		const right = parts.join(theme.fg("dim", " │ "));
-		const leftWidth = visibleWidth(left);
-		const rightWidth = visibleWidth(right);
-		if (leftWidth + rightWidth + 1 > width) {
-			return [truncateToWidth(`${left}${right}`, width, "…", true)];
+		const pill = theme.bg(MODE_BG[data.mode], theme.bold(theme.fg(MODE_FG[data.mode], ` ${MODE_LABEL[data.mode]} `)));
+
+		const right: string[] = [theme.fg("muted", `${data.line}/${data.total}`)];
+		if (data.pending) right.push(theme.fg("warning", data.pending));
+		if (data.hint) right.push(theme.fg("dim", data.hint));
+		if (data.streaming) right.push(theme.fg("success", "● working"));
+		right.push(theme.fg("text", data.sessionName));
+		if (data.parent) right.push(theme.fg("dim", `fork ${data.parent}`));
+		if (data.message) right.push(theme.fg("warning", data.message));
+
+		const left = `${pill}${pad}${divider}${pad}`;
+		const body = right.join(`${pad}${divider}${pad}`);
+		const needsGap = visibleWidth(left) + visibleWidth(body) + 1 > width;
+		if (needsGap) {
+			return [truncateToWidth(`${pill} ${body}`, width, "…", true)];
 		}
-		return [`${left}${" ".repeat(Math.max(0, width - leftWidth - rightWidth))}${right}`];
+		const gap = " ".repeat(Math.max(1, width - visibleWidth(left) - visibleWidth(body)));
+		return [`${left}${body}${gap}`];
 	}
 }

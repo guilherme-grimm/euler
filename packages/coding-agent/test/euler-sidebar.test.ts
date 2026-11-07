@@ -1,5 +1,5 @@
 import assert from "node:assert";
-import { stripTerminalSequences } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, it } from "vitest";
 import { EulerSidebar, orderThreads, relativeAge, type SidebarSnapshot } from "../src/modes/euler/euler-sidebar.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
@@ -22,12 +22,12 @@ function setup() {
 				messageCount: 4,
 				parentPath: "/s/parent.jsonl",
 			},
-			{ path: "/s/old.jsonl", title: "old thread", modified: OLD, messageCount: 2 },
+			{ path: "/s/old.jsonl", title: "old thread", modified: OLD, messageCount: 2, unread: true },
 			{
 				path: "/s/orphan.jsonl",
 				title: "orphan fork",
 				modified: OLD,
-				messageCount: 1,
+				messageCount: 0,
 				parentPath: "/s/missing.jsonl",
 			},
 		],
@@ -65,16 +65,23 @@ describe("euler sidebar", () => {
 
 	it("renders a header, markers and ages", () => {
 		const { sidebar } = setup();
-		const lines = sidebar.render(30).join("\n");
-		assert.ok(lines.includes("threads 4"));
-		assert.ok(lines.includes("● refactor auth"));
-		assert.ok(lines.includes("○ old thread"));
 		const plain = sidebar.render(30).map((line) => stripTerminalSequences(line));
+		assert.ok(plain.some((line) => line.includes("threads 4")));
+		assert.ok(plain.some((line) => line.startsWith("● refactor auth")));
+		assert.ok(
+			plain.some((line) => line.includes("◆ old thread")),
+			"unread marker",
+		);
+		assert.ok(
+			plain.some((line) => line.includes("· orphan fork")),
+			"empty marker",
+		);
 		assert.ok(plain.some((line) => line.startsWith("└ ○ ") && line.includes("compare option B")));
 		assert.ok(
-			plain.some((line) => line.includes("j/k move")),
+			plain.some((line) => line.includes("j/k")),
 			"footer hint",
 		);
+		for (const line of plain) assert.ok(visibleWidth(line) <= 30, `line too wide: ${line}`);
 	});
 
 	it("navigates with j/k/gg/G and opens with enter", () => {
@@ -113,11 +120,30 @@ describe("euler sidebar", () => {
 		assert.deepEqual(events, ["refresh", "new"]);
 	});
 
-	it("formats relative ages", () => {
+	it("formats relative ages inside four cells", () => {
 		const now = new Date("2026-11-07T10:00:30Z").getTime();
 		assert.equal(relativeAge(new Date("2026-11-07T10:00:00Z"), now), "30s");
 		assert.equal(relativeAge(new Date("2026-11-07T09:30:00Z"), now), "30m");
 		assert.equal(relativeAge(new Date("2026-11-07T05:00:00Z"), now), "5h");
 		assert.equal(relativeAge(new Date("2026-11-04T10:00:00Z"), now), "3d");
+		assert.equal(relativeAge(new Date("2026-01-01T10:00:00Z"), now), "44w");
+		assert.equal(relativeAge(new Date("2015-01-01T10:00:00Z"), now), ">9y");
+		for (const days of [1, 99, 100, 700, 4000]) {
+			const age = relativeAge(new Date(now - days * 86_400_000), now);
+			assert.ok(visibleWidth(age) <= 4, `age too wide: ${age}`);
+		}
+	});
+
+	it("marks the live thread and never overflows the rail", () => {
+		const { sidebar, snapshot } = setup();
+		snapshot.live = true;
+		snapshot.currentPath = "/s/parent.jsonl";
+		const plain = sidebar.render(28).map((line) => stripTerminalSequences(line));
+		assert.ok(
+			plain.some((line) => line.includes("◉") && line.includes("refactor auth")),
+			"live glyph",
+		);
+		for (const line of plain) assert.ok(visibleWidth(line) <= 28, `overflow: ${line}`);
+		assert.equal(plain.length, 20, "rail fills the viewport height");
 	});
 });

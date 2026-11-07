@@ -68,18 +68,32 @@ normal mode; `i` returns to insert.
 ### Sidebar
 
 `<space>e` (or `Ctrl-h`) opens a persistent rail on the left listing every session for this
-workspace, with forks nested under the thread they came from and a `●` on the current one. Rows
-sort by activity, so a fork you just used lifts its parent to the top.
+workspace, with forks nested under the thread they came from. Rows sort by activity, so a fork you
+just used lifts its parent to the top, and the live session appears immediately even before its
+first turn is written to disk.
+
+| glyph | meaning |
+|---|---|
+| `◉` | current session with a turn in flight |
+| `●` | current session (idle) |
+| `◆` | unread: modified since you last opened it |
+| `·` | never used (no messages yet) |
+| `○` | read |
+
+Read state is persisted in `~/.pi/agent/euler-seen.json` (path → last opened). Opening a thread
+marks it read; the rail is not polled, it refreshes on open, after forks and after switching.
 
 | key (rail focused) | action |
 |---|---|
 | `j` `k`, `Ctrl-d` `Ctrl-u`, `gg` `G` | move the selection |
 | `Enter` | open that thread (or hide the rail when it is already current) |
 | `n` / `r` | new session / reload the list |
-| `Ctrl-l` | back to the transcript, rail stays open |
+| `Ctrl-l` | back to the transcript, rail stays open (`Ctrl-h` returns) |
 | `e` `q` `Esc` | hide the rail |
 
-The rail is refreshed when it opens, after forking, and after switching threads.
+The rail is refreshed when it opens, after forking, and after switching threads. Yank, quote and
+fork also raise a transient flash (`Quoted into the thread`, `Forked thread`, …) so actions have
+feedback beyond the statusline text.
 
 Prefixes show which-key hints in the statusline (`<space>` → `s previous conversations · t session
 tree · f fork thread · h this cheatsheet`), and `?` opens a grouped cheatsheet generated from the
