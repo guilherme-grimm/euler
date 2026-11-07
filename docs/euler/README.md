@@ -162,7 +162,8 @@ Tests: `packages/coding-agent/test/euler-{mode,motions,sidebar}.test.ts` and
 `packages/tui/test/keyboard-selection.test.ts` (33 vitest + 5 node:test cases).
 
 Performance (startup, memory, keystroke budget, npm-vs-bun evaluation):
-[PERFORMANCE.md](PERFORMANCE.md).
+[PERFORMANCE.md](PERFORMANCE.md). Code review, known issues and the next-session plan:
+[CODE-REVIEW.md](CODE-REVIEW.md).
 
 ## Updating upstream pi
 

@@ -14,8 +14,9 @@
 
 > **euler fork:** this repository is a fork of pi that adds a modal, vim-flavoured interaction
 > layer (`pi --ui euler`, or the `euler` binary). See [docs/euler](docs/euler/README.md) for keys,
-> the fork/quote model, the architecture seams, and the upstream update gate. Everything below
-> still describes upstream pi.
+> the fork/quote model, the architecture seams, and the upstream update gate.
+> Latest code review and next steps: [docs/euler/CODE-REVIEW.md](docs/euler/CODE-REVIEW.md).
+> Everything below still describes upstream pi.
 
 Pi is a minimal, extensible agent harness that you can make your own.
 
