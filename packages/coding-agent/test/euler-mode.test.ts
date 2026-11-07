@@ -17,6 +17,10 @@ const TRANSCRIPT = [
 	" Option B keeps the store inline.",
 ];
 
+interface FocusState {
+	foreign: boolean;
+}
+
 interface Recorded {
 	quotes: Array<{ text: string; details: Record<string, unknown> }>;
 	copies: string[];
@@ -33,6 +37,7 @@ function setup() {
 	tui.start();
 	const recorded: Recorded = { quotes: [], copies: [], forks: [], rewinds: [], opened: [] };
 	const state = { streaming: false };
+	const focus: FocusState = { foreign: false };
 	const prompts: EulerPrompt[] = [
 		{ entryId: "e1", text: "refactor the auth module" },
 		{ entryId: "e2", text: "now compare with option B" },
@@ -66,13 +71,14 @@ function setup() {
 		showStatus: () => {},
 		showError: () => {},
 		isStreaming: () => state.streaming,
+		hasForeignFocus: () => focus.foreign,
 		sessionName: () => "test-session",
 		parentName: () => undefined,
 	};
 	const mode = new EulerMode(host);
 	mode.attach();
 	created.push({ tui, mode });
-	return { terminal, tui, scroll, recorded, mode, state };
+	return { terminal, tui, scroll, recorded, mode, state, focus };
 }
 
 const created: Array<{ tui: TuiAltScreen; mode: EulerMode }> = [];
@@ -355,5 +361,42 @@ describe("EulerMode", () => {
 		await settle(terminal);
 		assert.equal(mode.statusData().pending, undefined);
 		assert.equal(mode.statusData().message, undefined, `unexpected message: ${mode.statusData().message}`);
+	});
+
+	it("keeps the cheatsheet open when the opening key releases", async () => {
+		const { terminal, tui } = setup();
+		await settle(terminal);
+		terminal.sendInput("\x1b");
+		terminal.sendInput("\x1b[47:63;2u"); // ? press
+		terminal.sendInput("\x1b[63;1:3u"); // ? release
+		await settle(terminal);
+		assert.equal(tui.hasOverlayEntries, true);
+		terminal.sendInput("x");
+		await settle(terminal);
+		assert.equal(tui.hasOverlayEntries, false);
+	});
+
+	it("yields keys to a focused pi selector", async () => {
+		const { terminal, tui, mode, focus, recorded } = setup();
+		await settle(terminal);
+		terminal.sendInput("\x1b");
+		terminal.sendInput("G");
+		await settle(terminal);
+		const before = tui.getKeyboardState()?.cursor.row;
+
+		focus.foreign = true;
+		terminal.sendInput("j");
+		terminal.sendInput("k");
+		terminal.sendInput("y");
+		await settle(terminal);
+		assert.equal(tui.getKeyboardState()?.cursor.row, before);
+		assert.equal(recorded.copies.length, 0);
+		assert.ok(!mode.statusData().message);
+
+		// Closing the selector restores euler's bindings.
+		focus.foreign = false;
+		terminal.sendInput("k");
+		await settle(terminal);
+		assert.ok((tui.getKeyboardState()?.cursor.row ?? 0) < (before ?? 0));
 	});
 });

@@ -79,6 +79,8 @@ export interface EulerHost {
 	showStatus(text: string): void;
 	showError(text: string): void;
 	isStreaming(): boolean;
+	/** True when a component other than the editor holds focus (pi selectors, pickers, dialogs). */
+	hasForeignFocus(): boolean;
 	sessionName(): string;
 	parentName(): string | undefined;
 }
@@ -160,6 +162,9 @@ export class EulerMode {
 		// binding twice, which turns a prefix like <space> into "<space><space>".
 		if (isKeyRelease(data)) return undefined;
 		if (this.overlay) return undefined;
+		// Pi renders its selectors (tree, sessions, models, settings) in the editor dock and gives
+		// them focus. Those keys belong to the selector, not to the transcript cursor.
+		if (this.host.hasForeignFocus()) return undefined;
 		// Any keystroke dismisses the previous one-shot status message (including the startup hint).
 		if (this.message) {
 			this.message = "";
@@ -740,6 +745,9 @@ export class EulerMode {
 			maxHeight: terminalHeight,
 		});
 		const listener = (data: string) => {
+			// The release of the key that opened the cheatsheet arrives after showOverlay(); closing
+			// on it would make the panel flash for one frame.
+			if (isKeyRelease(data)) return undefined;
 			if (data.length > 0) {
 				this.host.ui.removeInputListener(listener);
 				this.closeOverlay();

@@ -7369,6 +7369,10 @@ export class InteractiveMode {
 			showStatus: (text) => this.showStatus(text),
 			showError: (text) => this.showError(text),
 			isStreaming: () => this.session.isStreaming,
+			hasForeignFocus: () => {
+				const focus = (this.ui as TuiMainScreen | TuiAltScreen).getFocusedComponent();
+				return focus !== null && focus !== this.editor;
+			},
 			sessionName: () => this.currentSessionLabel(),
 			parentName: () => this.parentSessionLabel(),
 		};

@@ -77,6 +77,10 @@ pi's own release filter, and decoding a release would fire every binding twice, 
 into `<space><space>`. Euler also hides pi's "↓ Jump to latest message" pill: `G` already goes to
 the end.
 
+Pi's selectors (session tree, session picker, model/settings pickers) are not overlays: they take
+over the editor dock and receive focus. Euler yields every key while a component other than the
+editor is focused, so those panels keep their own keys (typing filters, arrows move).
+
 ## Model
 
 ### Quotes
