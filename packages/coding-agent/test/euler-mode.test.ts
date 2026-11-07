@@ -329,4 +329,31 @@ describe("EulerMode", () => {
 		await settle(terminal);
 		assert.equal(tui.hasOverlayEntries, false);
 	});
+
+	it("ignores Kitty key release events so a prefix fires once", async () => {
+		const { terminal, recorded, mode } = setup();
+		await settle(terminal);
+		terminal.sendInput("\x1b");
+
+		terminal.sendInput("\x1b[32u"); // space press
+		terminal.sendInput("\x1b[32;1:3u"); // space release
+		await settle(terminal);
+		assert.equal(mode.statusData().pending, "<space>");
+		assert.ok(!mode.statusData().message?.includes("unmapped"));
+
+		terminal.sendInput("\x1b[115u"); // s press
+		terminal.sendInput("\x1b[115;1:3u"); // s release
+		await settle(terminal);
+		assert.deepEqual(recorded.opened, ["sessions"]);
+	});
+
+	it("does nothing on a lone key release", async () => {
+		const { terminal, mode } = setup();
+		await settle(terminal);
+		terminal.sendInput("\x1b");
+		terminal.sendInput("\x1b[32;1:3u");
+		await settle(terminal);
+		assert.equal(mode.statusData().pending, undefined);
+		assert.equal(mode.statusData().message, undefined, `unexpected message: ${mode.statusData().message}`);
+	});
 });

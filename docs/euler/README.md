@@ -72,7 +72,10 @@ nothing unless a turn is streaming, in which case it reaches pi's abort handler.
 
 Keys are decoded through pi's `decodePrintableKey`, so terminals in the Kitty keyboard protocol
 (space arrives as `\x1b[32u`, `?` as `\x1b[47:63;2u`) work the same as plain-byte terminals.
-Euler also hides pi's "↓ Jump to latest message" pill: `G` already goes to the end.
+Key **release** events (`\x1b[32;1:3u`) are filtered before decoding — input listeners run before
+pi's own release filter, and decoding a release would fire every binding twice, turning `<space>`
+into `<space><space>`. Euler also hides pi's "↓ Jump to latest message" pill: `G` already goes to
+the end.
 
 ## Model
 

@@ -12,6 +12,7 @@ import {
 	Box,
 	type Component,
 	Input,
+	isKeyRelease,
 	matchesKey,
 	type OverlayHandle,
 	type ScrollView,
@@ -154,7 +155,16 @@ export class EulerMode {
 	}
 
 	private handleInput(data: string): { consume?: boolean } | undefined {
+		// Input listeners run before pi's per-component release filter, and the Kitty protocol
+		// reports a release for every key (`\x1b[32;1:3u` for space). Decoding one would fire the
+		// binding twice, which turns a prefix like <space> into "<space><space>".
+		if (isKeyRelease(data)) return undefined;
 		if (this.overlay) return undefined;
+		// Any keystroke dismisses the previous one-shot status message (including the startup hint).
+		if (this.message) {
+			this.message = "";
+			this.host.ui.requestRender();
+		}
 		if (this.mode === "insert") {
 			if (matchesKey(data, "escape")) {
 				this.enterNormal();
@@ -179,7 +189,6 @@ export class EulerMode {
 	}
 
 	private handleVimKey(data: string): { consume?: boolean } | undefined {
-		this.message = "";
 		const key = canonicalKey(data);
 		if (!key) return undefined;
 
