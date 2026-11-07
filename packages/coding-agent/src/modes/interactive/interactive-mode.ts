@@ -37,6 +37,7 @@ import {
 	type DefaultTextStyle,
 	fuzzyFilter,
 	getCapabilities,
+	HStack,
 	hyperlink,
 	Markdown,
 	matchesKey,
@@ -137,6 +138,7 @@ import { stripBom } from "../../utils/text.ts";
 import { ensureTool, type ToolStatus } from "../../utils/tools-manager.ts";
 import { checkForNewPiVersion, type LatestPiRelease } from "../../utils/version-check.ts";
 import { type EulerHost, EulerMode, type EulerPrompt } from "../euler/euler-mode.ts";
+import { EulerSidebar, type SidebarSnapshot, type SidebarThread } from "../euler/euler-sidebar.ts";
 import { EulerStatusLine } from "../euler/euler-status.ts";
 import { reportBug } from "./bug-report.ts";
 import { createChatViewport } from "./chat-viewport.ts";
@@ -475,6 +477,10 @@ export class InteractiveMode {
 	private transcriptScrollView: TuiLayouts.ScrollView | undefined;
 	private eulerMode: EulerMode | undefined;
 	private eulerStatusLine: EulerStatusLine | undefined;
+	private eulerSidebar: EulerSidebar | undefined;
+	private eulerSidebarOpen = false;
+	private eulerSidebarSnapshot: SidebarSnapshot = { threads: [], loading: false };
+	private eulerSidebarRequest = 0;
 	private fullscreenLayoutRoot: Component | undefined;
 	private pendingMessagesContainer: Container;
 	private statusContainer: Container;
@@ -1030,7 +1036,8 @@ export class InteractiveMode {
 			scrollbarThumbStyle: (text) => theme.fg("scrollbarThumb", text),
 		});
 		this.transcriptScrollView = viewport.transcript;
-		this.fullscreenLayoutRoot = viewport.root;
+		this.ensureEulerSidebar();
+		this.fullscreenLayoutRoot = this.buildEulerRoot(viewport.root);
 		this.mountInteractiveTui(this.renderer, [
 			this.documentContainer,
 			this.pendingMessagesContainer,
@@ -7316,6 +7323,128 @@ export class InteractiveMode {
 		return prompts;
 	}
 
+	/**
+	 * The rail must exist before the layout root is built, otherwise the stack keeps a root without
+	 * it and toggling `visible` can never show it.
+	 */
+	private ensureEulerSidebar(): EulerSidebar | undefined {
+		if (!this.eulerEnabled()) return undefined;
+		this.eulerSidebar ??= new EulerSidebar({
+			read: () => this.eulerSidebarSnapshot,
+			readHeight: () => this.ui.terminal.rows,
+			onOpen: (sessionPath) => this.openEulerThread(sessionPath),
+			onNew: () => {
+				this.closeEulerSidebar();
+				void this.handleClearCommand();
+			},
+			onHide: () => this.closeEulerSidebar(),
+			onBlur: () => this.leaveEulerSidebar(),
+			onRefresh: () => this.refreshEulerThreads(),
+			requestRender: () => this.ui.requestRender(),
+		});
+		return this.eulerSidebar;
+	}
+
+	/**
+	 * Sidebar + main column, built once and kept mounted.
+	 *
+	 * Toggling only flips `visible`; swapping layout roots remounted the transcript subtree and left
+	 * its scroll box stale (motions saw an empty transcript after hiding the rail).
+	 */
+	private buildEulerRoot(base: Component): Component {
+		const sidebar = this.eulerSidebar;
+		if (!this.eulerEnabled() || !sidebar) return base;
+		const width = Math.min(38, Math.max(26, Math.floor(this.ui.terminal.columns * 0.28)));
+		return new HStack([
+			{ component: sidebar, basis: width, grow: 0, shrink: 0, visible: () => this.eulerSidebarOpen },
+			{ component: base, basis: 0, grow: 1, shrink: 1 },
+		]);
+	}
+
+	private applyEulerLayout(): void {
+		this.ui.requestRender();
+	}
+
+	private toggleEulerSidebar(): void {
+		if (!this.eulerEnabled() || !this.eulerSidebar) return;
+		if (this.eulerSidebarOpen) {
+			this.closeEulerSidebar();
+			return;
+		}
+		if (this.ui.terminal.columns < 80) {
+			this.showWarning("Terminal too narrow for the thread sidebar");
+			return;
+		}
+		this.eulerSidebarOpen = true;
+		this.applyEulerLayout();
+		this.eulerSidebar.selectCurrent();
+		this.ui.setFocus(this.eulerSidebar);
+		this.refreshEulerThreads();
+	}
+
+	private showEulerSidebar(): void {
+		if (!this.eulerEnabled() || !this.eulerSidebar) return;
+		if (!this.eulerSidebarOpen) {
+			this.toggleEulerSidebar();
+			return;
+		}
+		this.ui.setFocus(this.eulerSidebar);
+		this.refreshEulerThreads();
+	}
+
+	private leaveEulerSidebar(): void {
+		if (!this.eulerSidebarOpen) return;
+		this.ui.setFocus(null);
+		this.ui.requestRender();
+	}
+
+	private closeEulerSidebar(): void {
+		if (!this.eulerSidebarOpen) return;
+		this.eulerSidebarOpen = false;
+		this.applyEulerLayout();
+		// Hand focus back to the transcript layer (normal mode) rather than silently typing.
+		this.ui.setFocus(null);
+		this.ui.requestRender();
+	}
+
+	/** Load sessions for the rail; token-guarded so a slow scan cannot overwrite a newer one. */
+	private refreshEulerThreads(): void {
+		const request = ++this.eulerSidebarRequest;
+		this.eulerSidebarSnapshot = { ...this.eulerSidebarSnapshot, loading: true };
+		this.ui.requestRender();
+		void SessionManager.list(this.sessionManager.getCwd(), this.sessionManager.getSessionDir())
+			.then((sessions) => {
+				if (request !== this.eulerSidebarRequest) return;
+				const threads: SidebarThread[] = sessions.map((session) => ({
+					path: session.path,
+					title: session.name?.trim() || session.firstMessage || path.basename(session.path, ".jsonl"),
+					parentPath: session.parentSessionPath,
+					modified: session.modified,
+					messageCount: session.messageCount,
+				}));
+				this.eulerSidebarSnapshot = {
+					threads,
+					currentPath: this.sessionManager.getSessionFile(),
+					loading: false,
+				};
+			})
+			.catch(() => {
+				if (request !== this.eulerSidebarRequest) return;
+				this.eulerSidebarSnapshot = { ...this.eulerSidebarSnapshot, loading: false };
+			})
+			.finally(() => {
+				if (request === this.eulerSidebarRequest) this.ui.requestRender();
+			});
+	}
+
+	private openEulerThread(sessionPath: string): void {
+		void this.handleResumeSession(sessionPath).finally(() => {
+			this.refreshEulerThreads();
+			if (this.eulerSidebarOpen && this.eulerSidebar) this.ui.setFocus(this.eulerSidebar);
+			this.ui.requestRender();
+		});
+	}
+
 	private attachEulerMode(): void {
 		if (!this.eulerEnabled()) return;
 		if (!(this.renderer instanceof TuiAltScreen) || !this.transcriptScrollView) {
@@ -7335,12 +7464,14 @@ export class InteractiveMode {
 				if (result.cancelled) return;
 				this.editor.setText("");
 				this.showStatus("Forked thread: same context, new session");
+				this.refreshEulerThreads();
 			},
 			forkBeforePrompt: async (prompt) => {
 				const result = await this.runtimeHost.fork(prompt.entryId);
 				if (result.cancelled) return;
 				this.editor.setText(result.selectedText ?? "");
 				this.showStatus("Forked before prompt");
+				this.refreshEulerThreads();
 			},
 			prompts: () => this.branchPrompts(),
 			addQuote: (text, details) => {
@@ -7375,7 +7506,11 @@ export class InteractiveMode {
 			},
 			sessionName: () => this.currentSessionLabel(),
 			parentName: () => this.parentSessionLabel(),
+			toggleSidebar: () => this.toggleEulerSidebar(),
+			showSidebar: () => this.showEulerSidebar(),
+			leaveSidebar: () => this.leaveEulerSidebar(),
 		};
+		this.ensureEulerSidebar();
 		this.eulerMode = new EulerMode(host);
 		this.eulerMode.attach();
 	}
@@ -7383,6 +7518,10 @@ export class InteractiveMode {
 	private detachEulerMode(): void {
 		this.eulerMode?.dispose();
 		this.eulerMode = undefined;
+		if (this.eulerSidebarOpen) {
+			this.eulerSidebarOpen = false;
+			this.applyEulerLayout();
+		}
 	}
 
 	stop(fullscreenExitOutput = this.settingsManager.getFullscreenExitOutput()): void {

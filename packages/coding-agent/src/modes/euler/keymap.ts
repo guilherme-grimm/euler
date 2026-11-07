@@ -52,7 +52,10 @@ export type EulerAction =
 	| "help"
 	| "insert"
 	| "sessions"
-	| "tree";
+	| "tree"
+	| "sidebar"
+	| "focusSidebar"
+	| "focusTranscript";
 
 export interface KeymapEntry {
 	/** Space-separated key tokens, e.g. `"g g"`, `"space s"`, `"ctrl+d"`. */
@@ -121,6 +124,9 @@ export const KEYMAP: readonly KeymapEntry[] = [
 	{ keys: "N", modes: BOTH, group: "search", desc: "previous match", action: "previousMatch" },
 
 	// leader
+	{ keys: "space e", modes: NORMAL, group: "session", desc: "toggle thread sidebar", action: "sidebar" },
+	{ keys: "ctrl+h", modes: NORMAL, group: "session", desc: "focus thread sidebar", action: "focusSidebar" },
+	{ keys: "ctrl+l", modes: NORMAL, group: "session", desc: "focus transcript", action: "focusTranscript" },
 	{ keys: "space s", modes: NORMAL, group: "session", desc: "previous conversations", action: "sessions" },
 	{ keys: "space t", modes: NORMAL, group: "session", desc: "session tree", action: "tree" },
 	{ keys: "space f", modes: NORMAL, group: "session", desc: "fork thread", action: "forkLeaf" },
@@ -132,7 +138,17 @@ export const KEYMAP: readonly KeymapEntry[] = [
 ] as const;
 
 /** Keys the engine canonicalizes from raw terminal bytes; everything else is a printable char. */
-const SPECIAL_KEYS = ["ctrl+d", "ctrl+u", "ctrl+f", "ctrl+b", "ctrl+e", "ctrl+y", "escape"] as const;
+const SPECIAL_KEYS = [
+	"ctrl+d",
+	"ctrl+u",
+	"ctrl+f",
+	"ctrl+b",
+	"ctrl+e",
+	"ctrl+y",
+	"ctrl+h",
+	"ctrl+l",
+	"escape",
+] as const;
 
 export function tokens(keys: string): string[] {
 	return keys.split(" ").filter(Boolean);

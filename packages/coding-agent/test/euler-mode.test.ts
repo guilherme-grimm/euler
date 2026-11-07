@@ -66,6 +66,15 @@ function setup() {
 		openTree: () => {
 			recorded.opened.push("tree");
 		},
+		toggleSidebar: () => {
+			recorded.opened.push("sidebar");
+		},
+		showSidebar: () => {
+			recorded.opened.push("showSidebar");
+		},
+		leaveSidebar: () => {
+			recorded.opened.push("leaveSidebar");
+		},
 		focusEditor: () => {},
 		blurEditor: () => {},
 		showStatus: () => {},
@@ -398,5 +407,16 @@ describe("EulerMode", () => {
 		terminal.sendInput("k");
 		await settle(terminal);
 		assert.ok((tui.getKeyboardState()?.cursor.row ?? 0) < (before ?? 0));
+	});
+
+	it("opens the rail from ctrl+h and leaves from ctrl+l", async () => {
+		const { terminal, recorded } = setup();
+		await settle(terminal);
+		terminal.sendInput("\x1b");
+		terminal.sendInput("\x08");
+		await settle(terminal);
+		terminal.sendInput("\x0c");
+		await settle(terminal);
+		assert.deepEqual(recorded.opened, ["showSidebar", "leaveSidebar"]);
 	});
 });

@@ -74,6 +74,12 @@ export interface EulerHost {
 	copy(text: string): Promise<boolean>;
 	openSessions(): void;
 	openTree(): void;
+	/** Show/hide the persistent thread rail on the left. */
+	toggleSidebar(): void;
+	/** Open the rail if needed and focus it. */
+	showSidebar(): void;
+	/** Return focus to the transcript without closing the rail. */
+	leaveSidebar(): void;
 	focusEditor(): void;
 	blurEditor(): void;
 	showStatus(text: string): void;
@@ -247,7 +253,16 @@ export class EulerMode {
 
 	private runAction(action: EulerAction, count: number): void {
 		const doc = this.doc();
-		if (!doc && action !== "help" && action !== "sessions" && action !== "tree" && action !== "insert") {
+		if (
+			!doc &&
+			action !== "help" &&
+			action !== "sessions" &&
+			action !== "tree" &&
+			action !== "sidebar" &&
+			action !== "focusSidebar" &&
+			action !== "focusTranscript" &&
+			action !== "insert"
+		) {
 			this.message = "no transcript yet";
 			return;
 		}
@@ -387,6 +402,15 @@ export class EulerMode {
 				return;
 			case "tree":
 				this.host.openTree();
+				return;
+			case "sidebar":
+				this.host.toggleSidebar();
+				return;
+			case "focusSidebar":
+				this.host.showSidebar();
+				return;
+			case "focusTranscript":
+				this.host.leaveSidebar();
 				return;
 		}
 	}
