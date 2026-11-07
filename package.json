@@ -58,7 +58,7 @@
 		"euler:gate": "node tools/euler/upstream-gate.mjs",
 		"euler:test": "npm --prefix packages/coding-agent run test -- test/euler",
 		"build:ui": "npm --prefix packages/tui run build && npm --prefix packages/coding-agent run build",
-		"dev": "npm run build:ui && ./bin/euler --continue"
+		"dev": "node tools/euler/dev.mjs"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.3.5",

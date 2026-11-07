@@ -9,25 +9,35 @@ Verified: boot in the repo (title `euler - euler`), `:q` exits cleanly, `--conti
 
 ```bash
 cd ~/projects/euler
-./bin/euler                      # or: euler, if ~/.local/bin/euler points at bin/euler
+npm run dev                      # supervisor: source mode, reload on save
 ```
 
-Inside that session you have the usual tools (`read`, `edit`, `bash`, tests). When you change the
-UI, the running process keeps the bundle it booted with — rebuild and resume:
+The supervisor runs euler straight from TypeScript — no build — and watches
+`packages/coding-agent/src` and `packages/tui/src`. On save it restarts the process and resumes the
+same session in about a second. `:q` stops both.
+
+What "reload" means: **the process restarts**. The session lives on disk, so the conversation
+survives; a turn that is streaming is aborted; the editor buffer and any pending input are lost.
+That is the trade for not maintaining a module-reload boundary in the app.
 
 ```bash
-# in a tool shell, or a second terminal
-npm run build:ui                 # tui + coding-agent only (what UI work needs)
+npm run dev                                  # resume the most recent session for this directory
+EULER_DEV_SESSION=euler-dev npm run dev      # pin one session id across reloads
+npm run dev -- --session-dir /tmp/euler-dev  # pass extra args to euler
 ```
 
-then `:q` and:
+The watcher only decides *when* to restart; a restart re-reads everything, including extensions
+under `~/.pi/agent` and `dist/` assets. It ignores `*.test.ts`, `dist/`, and `node_modules`, so
+writing tests or docs does not interrupt you. If a reload produces a boot error, the supervisor
+logs it once and waits for the next save instead of crash-looping.
+
+You still need a build for the **built binary** (`bin/euler`), which is what you use outside the
+dev loop:
 
 ```bash
-euler --continue                 # same conversation, new bundle
+npm run build:ui                 # tui + coding-agent only (UI work)
+npm run build                    # everything (agent/tool/provider changes)
 ```
-
-`npm run dev` does both in one step from outside the running session (`build:ui` + `--continue`).
-For non-UI work (agent, tools, providers) use the full `npm run build`.
 
 ## Running the checks from inside
 
@@ -68,8 +78,9 @@ Same for a wedged terminal: `pi --ui pi` is the escape hatch, and `reset` recove
 
 ## What dogfooding does not give you yet
 
-- No hot reload. Every UI change costs a rebuild and a session resume.
-- No in-app "restart" command; `:q` + `--continue` is the loop. A restart key would need a wrapper
-  process, which is a deliberate non-goal for now.
+- **Process-level reload, not in-place module reload.** A reload restarts the app; there is no
+  state carried across it beyond the session on disk.
+- No in-app restart command; the supervisor owns that. Adding one would need the app to re-exec
+  itself, which conflicts with the terminal restore path.
 - Editing the code that hosts you is fine, but the process in memory is the old code until you
   resume — do not debug a fix you have not rebuilt.
