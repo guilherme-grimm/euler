@@ -7,6 +7,24 @@ interaction layer over the fullscreen transcript. It is a drop-in replacement: s
 Status: **MVP**. Modal navigation, visual selection, persistent quotes and thread forking work.
 The input editor is still plain insert mode (see [Roadmap](#roadmap)).
 
+## Identity
+
+Euler knows it is Euler. When the `euler` layer is active, an addendum is appended to the system
+prompt through Pi's normal `appendSystemPrompt` seam:
+
+- it is a fork of Pi built for a vim-native terminal workflow;
+- quotes are deliberate, persistent context injections, not remarks about the quote;
+- parallel forked threads are intentional workstreams, not duplicated work;
+- the tools, docs and paths it reads are Pi's and stay accurate here.
+
+The app name is `euler` (`piConfig.name`), so the terminal title is `euler - <cwd>`, CLI usage
+strings read `euler …`, and the environment prefix is `EULER_*`. The config directory remains
+`.pi`, so `~/.pi/agent` — sessions, auth, skills, extensions, MCP — stays drop-in.
+
+```bash
+euler --version     # euler 1.5.0
+```
+
 ## Run it
 
 ```bash
@@ -63,7 +81,7 @@ normal mode; `i` returns to insert.
 | normal | `<space>f` | fork |
 | normal | `<space>h` or `?` | cheatsheet (vim-style float) |
 | normal | `i` / `A` | back to insert (editor) |
-| normal | `:` | command line (`:q`, `:help`) |
+| normal | `:` | command line (see below) |
 | normal | `Esc` | clear pending prefix/count, or abort a streaming turn |
 
 ### Sidebar
@@ -117,6 +135,12 @@ the end.
 Pi's selectors (session tree, session picker, model/settings pickers) are not overlays: they take
 over the editor dock and receive focus. Euler yields every key while a component other than the
 editor is focused, so those panels keep their own keys (typing filters, arrows move).
+
+### Command line
+
+`:q` · `:q!` · `:quit` · `:wq` · `:x` quit · `:help` opens the cheatsheet · `:e` (or `:edit`) hands
+the prompt to `$VISUAL`/`$EDITOR` · `:threads` toggles the rail · `:new` starts a session ·
+`:fork` forks the current thread. Anything else reports `not a command: :foo`.
 
 ## Model
 

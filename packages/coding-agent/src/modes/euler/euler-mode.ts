@@ -24,6 +24,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { theme } from "../interactive/theme/theme.ts";
 import type { EulerModeName, EulerStatusData } from "./euler-status.ts";
+import { EULER_STARTUP_HINT } from "./identity.ts";
 import {
 	canonicalKey,
 	cheatsheetSections,
@@ -85,6 +86,10 @@ export interface EulerHost {
 	flash(message: string): void;
 	/** Leave the application (`:q`). */
 	quit(): void;
+	/** `:e` — hand the current prompt to $VISUAL/$EDITOR. */
+	openEditor(): void;
+	/** `:new` — start a fresh session. */
+	newSession(): void;
 	focusEditor(): void;
 	blurEditor(): void;
 	showStatus(text: string): void;
@@ -97,6 +102,17 @@ export interface EulerHost {
 }
 
 const SCROLL_OFF = 10;
+/** Actions that make sense before any transcript exists (host-level or overlay actions). */
+const DOC_FREE_ACTIONS = new Set<EulerAction>([
+	"help",
+	"sessions",
+	"tree",
+	"sidebar",
+	"focusSidebar",
+	"focusTranscript",
+	"insert",
+	"command",
+]);
 const PAGE_OVERLAP = 2;
 
 export class EulerMode {
@@ -114,6 +130,8 @@ export class EulerMode {
 	private message = "";
 	private overlay?: OverlayHandle;
 	private backdrop?: OverlayHandle;
+	/** One-shot listener that closes an informational overlay; removed with the overlay. */
+	private overlayKeyListener?: (data: string) => { consume?: boolean } | undefined;
 	private detach?: () => void;
 	private readonly host: EulerHost;
 
@@ -124,7 +142,7 @@ export class EulerMode {
 	attach(): void {
 		this.detach = this.host.ui.addInputListener((data) => this.handleInput(data));
 		// First-run discoverability: cleared as soon as the user presses anything.
-		this.message = "Esc for vim mode · ? for keys";
+		this.message = EULER_STARTUP_HINT;
 		this.syncCursor({ jumpToBottom: true });
 	}
 
@@ -136,6 +154,7 @@ export class EulerMode {
 		this.overlay = undefined;
 		this.backdrop?.hide();
 		this.backdrop = undefined;
+		this.clearOverlayListener();
 	}
 
 	statusData(): EulerStatusData {
@@ -263,17 +282,7 @@ export class EulerMode {
 
 	private runAction(action: EulerAction, count: number): void {
 		const doc = this.doc();
-		if (
-			!doc &&
-			action !== "help" &&
-			action !== "sessions" &&
-			action !== "tree" &&
-			action !== "sidebar" &&
-			action !== "focusSidebar" &&
-			action !== "focusTranscript" &&
-			action !== "insert" &&
-			action !== "command"
-		) {
+		if (!doc && !DOC_FREE_ACTIONS.has(action)) {
 			this.message = "no transcript yet";
 			return;
 		}
@@ -694,6 +703,20 @@ export class EulerMode {
 			case "help":
 				this.showHelp();
 				return;
+			case "e":
+			case "edit":
+				this.host.openEditor();
+				return;
+			case "threads":
+			case "t":
+				this.host.toggleSidebar();
+				return;
+			case "new":
+				this.host.newSession();
+				return;
+			case "fork":
+				void this.forkAtLeaf();
+				return;
 			default:
 				this.message = `not a command: :${command}`;
 				this.syncCursor();
@@ -726,7 +749,14 @@ export class EulerMode {
 		this.host.ui.requestRender();
 	}
 
+	private clearOverlayListener(): void {
+		if (!this.overlayKeyListener) return;
+		this.host.ui.removeInputListener(this.overlayKeyListener);
+		this.overlayKeyListener = undefined;
+	}
+
 	private closeOverlay(): void {
+		this.clearOverlayListener();
 		this.overlay?.hide();
 		this.overlay = undefined;
 		this.backdrop?.hide();

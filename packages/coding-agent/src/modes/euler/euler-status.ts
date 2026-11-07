@@ -7,9 +7,10 @@
  */
 
 import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { type ThemeBg, type ThemeColor, theme } from "../interactive/theme/theme.ts";
+import { type ThemeBg, theme } from "../interactive/theme/theme.ts";
+import type { EulerModeName } from "./keymap.ts";
 
-export type EulerModeName = "normal" | "visual" | "insert" | "search" | "command";
+export type { EulerModeName };
 
 export interface EulerStatusData {
 	mode: EulerModeName;
@@ -42,14 +43,6 @@ const MODE_BG: Record<EulerModeName, ThemeBg> = {
 	command: "toolPendingBg",
 };
 
-const MODE_FG: Record<EulerModeName, ThemeColor> = {
-	normal: "text",
-	insert: "text",
-	visual: "text",
-	search: "text",
-	command: "text",
-};
-
 export class EulerStatusLine implements Component {
 	private readonly read: () => EulerStatusData;
 
@@ -64,7 +57,7 @@ export class EulerStatusLine implements Component {
 		const divider = theme.fg("dim", "│");
 		const pad = theme.fg("dim", " ");
 
-		const pill = theme.bg(MODE_BG[data.mode], theme.bold(theme.fg(MODE_FG[data.mode], ` ${MODE_LABEL[data.mode]} `)));
+		const pill = theme.bg(MODE_BG[data.mode], theme.bold(theme.fg("text", ` ${MODE_LABEL[data.mode]} `)));
 
 		const right: string[] = [theme.fg("muted", `${data.line}/${data.total}`)];
 		if (data.pending) right.push(theme.fg("warning", data.pending));

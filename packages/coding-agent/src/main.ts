@@ -67,6 +67,7 @@ import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/tru
 import { builtInExtensions } from "./extensions/index.ts";
 import { loadMcpCommand } from "./extensions/mcp/cli.lazy.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
+import { EULER_IDENTITY, eulerVersionLabel } from "./modes/euler/identity.ts";
 import { InteractiveMode, runPrintMode, runRpcMode } from "./modes/index.ts";
 import { initTheme, setThemeJsonValidator, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
 import { validateThemeJson } from "./modes/interactive/theme/theme-schema.ts";
@@ -686,6 +687,8 @@ export async function main(args: string[], options?: MainOptions) {
 		// Euler's cursor and selection model lives in the alternate screen; there is no sensible
 		// regular-mode fallback, so the mode is forced instead of silently degrading.
 		parsed.tuiMode = "fullscreen";
+		// Identity rides the normal addendum seam, so the core prompt machinery stays upstream.
+		parsed.appendSystemPrompt = [...(parsed.appendSystemPrompt ?? []), EULER_IDENTITY];
 	}
 	if (parsed.diagnostics.length > 0) {
 		for (const d of parsed.diagnostics) {
@@ -699,7 +702,7 @@ export async function main(args: string[], options?: MainOptions) {
 	time("parseArgs");
 
 	if (parsed.version) {
-		console.log(VERSION);
+		console.log(parsed.ui === "euler" ? eulerVersionLabel(VERSION) : VERSION);
 		process.exit(0);
 	}
 

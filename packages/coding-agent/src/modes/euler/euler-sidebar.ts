@@ -41,6 +41,8 @@ export interface SidebarOptions {
 	read: () => SidebarSnapshot;
 	/** Terminal height, used to window the list so the selection stays visible. */
 	readHeight: () => number;
+	/** Terminal width, used to size the rail itself (`basis: "auto"` in the layout). */
+	readWidth: () => number;
 	onOpen: (path: string) => void;
 	onNew: () => void;
 	onHide: () => void;
@@ -49,6 +51,9 @@ export interface SidebarOptions {
 	onRefresh: () => void;
 	requestRender: () => void;
 }
+
+/** Placeholder path for the live session before it is written to disk. */
+export const CURRENT_THREAD_KEY = "<current>";
 
 const INDENT = 2;
 const AGE_WIDTH = 4;
@@ -125,6 +130,8 @@ export class EulerSidebar implements Component, Focusable {
 	private pendingG = false;
 	private searching = false;
 	private query = "";
+	/** Memoised tree order; `snapshot.threads` keeps its identity between refreshes. */
+	private orderCache?: { threads: readonly SidebarThread[]; currentPath?: string; rows: SidebarRow[] };
 	private readonly options: SidebarOptions;
 
 	constructor(options: SidebarOptions) {
@@ -133,26 +140,32 @@ export class EulerSidebar implements Component, Focusable {
 
 	invalidate(): void {}
 
-	/** Full list, forks nested, clamped to a valid selection. */
-	private allRows(): SidebarRow[] {
-		const snapshot = this.options.read();
-		return orderThreads(snapshot.threads, snapshot.currentPath);
+	/** Full tree, ordered once per snapshot. */
+	private ordered(snapshot: SidebarSnapshot): SidebarRow[] {
+		const cache = this.orderCache;
+		if (cache && cache.threads === snapshot.threads && cache.currentPath === snapshot.currentPath) return cache.rows;
+		const rows = orderThreads(snapshot.threads, snapshot.currentPath);
+		this.orderCache = { threads: snapshot.threads, currentPath: snapshot.currentPath, rows };
+		return rows;
 	}
 
-	/** Rows the rail actually shows: the recent working set, or search results. */
-	rows(): SidebarRow[] {
-		const all = this.allRows();
-		const search = this.searchActive();
+	/** Apply the recent-window or search filter, then clamp the selection into range. */
+	private visible(all: readonly SidebarRow[]): SidebarRow[] {
 		const cutoff = Date.now() - RECENT_WINDOW_MS;
 		const query = this.query.trim().toLowerCase();
-		const rows = search
+		const rows = this.searchActive()
 			? query.length === 0
-				? all
+				? [...all]
 				: all.filter((row) => oneLine(row.title).toLowerCase().includes(query))
 			: all.filter((row) => row.current || row.modified.getTime() >= cutoff);
 		if (this.selected >= rows.length) this.selected = Math.max(0, rows.length - 1);
 		if (this.selected < 0) this.selected = 0;
 		return rows;
+	}
+
+	/** Rows the rail actually shows: the recent working set, or search results. */
+	rows(): SidebarRow[] {
+		return this.visible(this.ordered(this.options.read()));
 	}
 
 	private searchActive(): boolean {
@@ -254,10 +267,12 @@ export class EulerSidebar implements Component, Focusable {
 		this.options.requestRender();
 	}
 
-	render(width: number): string[] {
+	render(_width: number): string[] {
 		const snapshot = this.options.read();
-		const rows = this.rows();
-		const all = this.allRows();
+		const all = this.ordered(snapshot);
+		const rows = this.visible(all);
+		// The rail owns its width so the layout can use `basis: "auto"` and follow resizes.
+		const width = Math.min(38, Math.max(26, Math.floor(this.options.readWidth() * 0.28)));
 		const inner = Math.max(10, width - 1);
 		const totalHeight = Math.max(6, this.options.readHeight());
 		const border = theme.fg("dim", "│");

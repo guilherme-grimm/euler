@@ -7,9 +7,10 @@
 
 import { decodePrintableKey, matchesKey } from "@earendil-works/pi-tui";
 
-export type EulerModeName = "normal" | "visual" | "insert" | "search";
-
 /** Modal modes a binding can be active in. Insert mode always passes through to the editor. */
+export type EulerModeName = "normal" | "visual" | "insert" | "search" | "command";
+
+/** Modes the keymap dispatches; insert passes through, command is an overlay. */
 export type BindingMode = "normal" | "visual";
 
 export type GroupName = "move" | "select" | "threads" | "search" | "session" | "mode";
@@ -70,7 +71,7 @@ export interface KeymapEntry {
 const BOTH: readonly BindingMode[] = ["normal", "visual"];
 const NORMAL: readonly BindingMode[] = ["normal"];
 
-export const GROUP_TITLES: Record<GroupName, string> = {
+const GROUP_TITLES: Record<GroupName, string> = {
 	move: "move",
 	select: "select",
 	threads: "threads",
@@ -182,7 +183,7 @@ export function canonicalKey(data: string): string | undefined {
 	return undefined;
 }
 
-export interface KeymapMatch {
+interface KeymapMatch {
 	exact?: KeymapEntry;
 	/** Bindings that continue with this prefix, e.g. pressing `g` yields `gg`. */
 	prefixes: KeymapEntry[];

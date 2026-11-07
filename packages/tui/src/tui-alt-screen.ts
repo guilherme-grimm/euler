@@ -366,8 +366,8 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		return { lines: box.scrollContentLines, top: view.scrollTop, height: view.viewportHeight, width: box.rect.width };
 	}
 
-	/** Text of the current keyboard selection, or the cursor character when nothing is selected. */
-	getKeyboardSelectionText(): string | undefined {
+	/** Selected text, or the grapheme under the cursor when nothing is selected. */
+	getKeyboardCursorText(): string | undefined {
 		const range = this.keyboardRange();
 		if (range) return this.getRangeText(range);
 		const state = this.keyboardState;

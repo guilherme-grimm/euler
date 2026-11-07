@@ -82,6 +82,12 @@ function setup() {
 		quit: () => {
 			recorded.opened.push("quit");
 		},
+		openEditor: () => {
+			recorded.opened.push("editor");
+		},
+		newSession: () => {
+			recorded.opened.push("new");
+		},
 		focusEditor: () => {},
 		blurEditor: () => {},
 		showStatus: () => {},
@@ -456,5 +462,23 @@ describe("EulerMode", () => {
 		await settle(terminal);
 		assert.ok(mode.statusData().message?.startsWith("not a command"));
 		assert.equal(recorded.opened.length, 0);
+	});
+
+	it("routes ADE commands from the command line", async () => {
+		const { terminal, recorded } = setup();
+		await settle(terminal);
+		terminal.sendInput("\x1b");
+		for (const [command, expected] of [
+			["e", "editor"],
+			["threads", "sidebar"],
+			["new", "new"],
+		] as const) {
+			terminal.sendInput(":");
+			await settle(terminal);
+			for (const char of command) terminal.sendInput(char);
+			terminal.sendInput("\r");
+			await settle(terminal);
+			assert.equal(recorded.opened.at(-1), expected, `:${command}`);
+		}
 	});
 });

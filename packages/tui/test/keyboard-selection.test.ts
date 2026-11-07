@@ -36,11 +36,11 @@ describe("TuiAltScreen keyboard state", () => {
 
 		tui.setKeyboardState({ scrollView: scroll, cursor: { row: 1, col: 2 } });
 		await terminal.waitForRender();
-		assert.equal(tui.getKeyboardSelectionText(), "c");
+		assert.equal(tui.getKeyboardCursorText(), "c");
 
 		tui.setKeyboardState({ scrollView: scroll, cursor: { row: 0, col: 0 } });
 		await terminal.waitForRender();
-		assert.equal(tui.getKeyboardSelectionText(), "a");
+		assert.equal(tui.getKeyboardCursorText(), "a");
 		tui.stop();
 	});
 
@@ -51,11 +51,11 @@ describe("TuiAltScreen keyboard state", () => {
 
 		tui.setKeyboardState({ scrollView: scroll, cursor: { row: 1, col: 2 }, anchor: { row: 0, col: 0 } });
 		await terminal.waitForRender();
-		assert.equal(tui.getKeyboardSelectionText(), "alpha beta gamma\nsec");
+		assert.equal(tui.getKeyboardCursorText(), "alpha beta gamma\nsec");
 
 		tui.setKeyboardState({ scrollView: scroll, cursor: { row: 0, col: 4 }, anchor: { row: 1, col: 2 } });
 		await terminal.waitForRender();
-		assert.equal(tui.getKeyboardSelectionText(), "a beta gamma\nsec");
+		assert.equal(tui.getKeyboardCursorText(), "a beta gamma\nsec");
 		tui.stop();
 	});
 
@@ -71,7 +71,7 @@ describe("TuiAltScreen keyboard state", () => {
 			linewise: true,
 		});
 		await terminal.waitForRender();
-		assert.equal(tui.getKeyboardSelectionText(), "second line here\nthird line");
+		assert.equal(tui.getKeyboardCursorText(), "second line here\nthird line");
 		tui.stop();
 	});
 

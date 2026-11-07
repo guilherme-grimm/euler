@@ -12,6 +12,9 @@ import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
 initTheme("dark");
 
+/** The rail sizes itself from the terminal width (readWidth 120 in the fixture). */
+const RAIL_WIDTH = Math.min(38, Math.max(26, Math.floor(120 * 0.28)));
+
 const OLD = new Date("2026-11-01T10:00:00Z");
 const MID = new Date("2026-11-06T10:00:00Z");
 const NEW = new Date("2026-11-07T10:00:00Z");
@@ -43,6 +46,7 @@ function setup() {
 	const sidebar = new EulerSidebar({
 		read: () => snapshot,
 		readHeight: () => 20,
+		readWidth: () => 120,
 		onOpen: (path) => events.push(`open:${path}`),
 		onNew: () => events.push("new"),
 		onHide: () => events.push("hide"),
@@ -87,7 +91,7 @@ describe("euler sidebar", () => {
 			plain.some((line) => line.includes("j/k")),
 			"footer hint",
 		);
-		for (const line of plain) assert.ok(visibleWidth(line) <= 30, `line too wide: ${line}`);
+		for (const line of plain) assert.ok(visibleWidth(line) <= RAIL_WIDTH, `line too wide: ${line}`);
 	});
 
 	it("navigates with j/k/gg/G and opens with enter", () => {
@@ -149,7 +153,7 @@ describe("euler sidebar", () => {
 			plain.some((line) => line.includes("◉") && line.includes("refactor auth")),
 			"live glyph",
 		);
-		for (const line of plain) assert.ok(visibleWidth(line) <= 28, `overflow: ${line}`);
+		for (const line of plain) assert.ok(visibleWidth(line) <= RAIL_WIDTH, `overflow: ${line}`);
 		assert.equal(plain.length, 20, "rail fills the viewport height");
 	});
 
@@ -159,12 +163,12 @@ describe("euler sidebar", () => {
 		assert.equal(sidebar.rows().length, 4);
 
 		const old = new Date(Date.now() - 40 * 86_400_000);
-		(snapshot.threads as SidebarThread[]).push({
-			path: "/s/ancient.jsonl",
-			title: "ancient thread",
-			modified: old,
-			messageCount: 3,
-		});
+		// Replace the array: the rail memoises its ordering on array identity (the host always
+		// hands it a fresh array after a refresh).
+		(snapshot as { threads: readonly SidebarThread[] }).threads = [
+			...snapshot.threads,
+			{ path: "/s/ancient.jsonl", title: "ancient thread", modified: old, messageCount: 3 },
+		];
 		assert.equal(sidebar.rows().length, 4, "old thread hidden by default");
 		assert.ok(sidebar.render(30).some((line) => stripTerminalSequences(line).includes("+1 older")));
 

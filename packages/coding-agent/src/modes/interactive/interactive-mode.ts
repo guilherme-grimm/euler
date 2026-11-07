@@ -138,7 +138,13 @@ import { stripBom } from "../../utils/text.ts";
 import { ensureTool, type ToolStatus } from "../../utils/tools-manager.ts";
 import { checkForNewPiVersion, type LatestPiRelease } from "../../utils/version-check.ts";
 import { type EulerHost, EulerMode, type EulerPrompt } from "../euler/euler-mode.ts";
-import { EulerSidebar, type SidebarSnapshot, type SidebarThread } from "../euler/euler-sidebar.ts";
+import {
+	CURRENT_THREAD_KEY,
+	EulerSidebar,
+	RECENT_WINDOW_MS,
+	type SidebarSnapshot,
+	type SidebarThread,
+} from "../euler/euler-sidebar.ts";
 import { EulerStatusLine } from "../euler/euler-status.ts";
 import { reportBug } from "./bug-report.ts";
 import { createChatViewport } from "./chat-viewport.ts";
@@ -284,9 +290,6 @@ type CompactionCostNotice = {
 	kind: "compaction" | "branch_summary";
 	usage: Usage;
 };
-
-/** Threads older than this are treated as read and hidden from the default rail view. */
-const EULER_UNREAD_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 type RenderSessionItem = AgentMessage | Extract<SessionEntry, { type: "custom" | "usage" }> | CompactionCostNotice;
 
@@ -7341,6 +7344,7 @@ export class InteractiveMode {
 				live: this.session.isStreaming,
 			}),
 			readHeight: () => this.ui.terminal.rows,
+			readWidth: () => this.ui.terminal.columns,
 			onOpen: (sessionPath) => this.openEulerThread(sessionPath),
 			onNew: () => {
 				this.closeEulerSidebar();
@@ -7363,9 +7367,16 @@ export class InteractiveMode {
 	private buildEulerRoot(base: Component): Component {
 		const sidebar = this.eulerSidebar;
 		if (!this.eulerEnabled() || !sidebar) return base;
-		const width = Math.min(38, Math.max(26, Math.floor(this.ui.terminal.columns * 0.28)));
 		return new HStack([
-			{ component: sidebar, basis: width, grow: 0, shrink: 0, visible: () => this.eulerSidebarOpen },
+			{
+				component: sidebar,
+				basis: "auto",
+				grow: 0,
+				shrink: 0,
+				minSize: 24,
+				maxSize: 40,
+				visible: () => this.eulerSidebarOpen,
+			},
 			{ component: base, basis: 0, grow: 1, shrink: 1 },
 		]);
 	}
@@ -7439,10 +7450,7 @@ export class InteractiveMode {
 		}
 	}
 
-	private markEulerSeen(sessionPath: string | undefined): void {
-		if (!sessionPath) return;
-		this.loadEulerSeen();
-		this.eulerSeen.set(sessionPath, Date.now());
+	private saveEulerSeen(): void {
 		try {
 			const payload = Object.fromEntries(
 				[...this.eulerSeen].map(([key, value]) => [key, new Date(value).toISOString()]),
@@ -7451,6 +7459,27 @@ export class InteractiveMode {
 		} catch {
 			// Best effort: a read-only agent dir must not break the rail.
 		}
+	}
+
+	private markEulerSeen(sessionPath: string | undefined): void {
+		if (!sessionPath) return;
+		this.loadEulerSeen();
+		const previous = this.eulerSeen.get(sessionPath);
+		this.eulerSeen.set(sessionPath, Date.now());
+		// Refreshes re-mark the current session; do not rewrite the file for a 2-second nudge.
+		if (previous === undefined || Date.now() - previous > 5_000) this.saveEulerSeen();
+	}
+
+	/** Drop seen entries whose session file no longer exists; the map would otherwise grow forever. */
+	private pruneEulerSeen(livePaths: Iterable<string>): void {
+		const live = new Set(livePaths);
+		let removed = false;
+		for (const key of [...this.eulerSeen.keys()]) {
+			if (live.has(key)) continue;
+			this.eulerSeen.delete(key);
+			removed = true;
+		}
+		if (removed) this.saveEulerSeen();
 	}
 
 	/** Load sessions for the rail; token-guarded so a slow scan cannot overwrite a newer one. */
@@ -7478,12 +7507,12 @@ export class InteractiveMode {
 						session.path !== currentPath &&
 						this.eulerSeen.has(session.path) &&
 						session.modified.getTime() > (this.eulerSeen.get(session.path) ?? 0) &&
-						Date.now() - session.modified.getTime() <= EULER_UNREAD_WINDOW_MS,
+						Date.now() - session.modified.getTime() <= RECENT_WINDOW_MS,
 				}));
 
 				// The live session is not on disk until its first turn finishes; keep it in the rail
 				// anyway so the current/live marker has somewhere to land.
-				const currentKey = currentPath ?? "<current>";
+				const currentKey = currentPath ?? CURRENT_THREAD_KEY;
 				if (!threads.some((thread) => thread.path === currentPath)) {
 					const branch = this.sessionManager.getBranch();
 					const firstPrompt = branch.find((entry) => entry.type === "message" && entry.message.role === "user");
@@ -7509,6 +7538,7 @@ export class InteractiveMode {
 					});
 				}
 
+				this.pruneEulerSeen(threads.map((thread) => thread.path));
 				this.eulerSidebarSnapshot = {
 					threads,
 					currentPath: currentKey,
@@ -7526,7 +7556,7 @@ export class InteractiveMode {
 	}
 
 	private openEulerThread(sessionPath: string): void {
-		if (sessionPath === "<current>") {
+		if (sessionPath === CURRENT_THREAD_KEY) {
 			this.leaveEulerSidebar();
 			return;
 		}
@@ -7607,6 +7637,15 @@ export class InteractiveMode {
 			},
 			quit: () => {
 				void this.shutdown();
+			},
+			openEditor: () => {
+				void this.handleOpenExternalEditor();
+			},
+			newSession: () => {
+				void this.handleClearCommand().finally(() => {
+					this.refreshEulerThreads();
+					this.ui.requestRender();
+				});
 			},
 		};
 		this.ensureEulerSidebar();

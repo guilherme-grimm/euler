@@ -1,7 +1,21 @@
 # euler — code review and handoff
 
-State as of `d7c5094` (2026-11-07). Everything below was produced from a read-only scan: file
+State as of `d7c5094`, with the fix pass landed in the identity/fixes commit (2026-11-07). Everything below was produced from a read-only scan: file
 reads, typecheck, lint, test runs, and the upstream gate. Nothing was changed while reviewing.
+
+
+## Fixed since this review
+
+Items 1, 2, 5, 6, 7, 8, 11, 12, 13 and 14 from below are addressed in `identity.ts` + the follow-up
+commit: the cheatsheet listener is tracked and removed, the rail sizes itself
+(`basis: "auto"`, so it follows resizes), one `EulerModeName`, one `RECENT_WINDOW_MS`,
+`CURRENT_THREAD_KEY`, `MODE_FG` deleted, `DOC_FREE` set, unused exports unexported,
+`getKeyboardCursorText()` renamed, `--ui` documented, and `euler-seen.json` pruned to live paths.
+Item 4 is fixed: the rail orders once per render (memoised on the threads array identity) and
+derives the visible subset from that single pass.
+
+Still open: 3 (the coding-agent suite has not completed), 9 (snapshot reads per keystroke), 15
+(`euler-mode.ts` size), 16 (seen-file write throttle is in place, but no profiles prove it).
 
 ## What exists today
 
