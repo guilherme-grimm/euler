@@ -1,22 +1,57 @@
 <p align="center">
-  <a href="https://pi.dev">
-    <img alt="pi logo" src="https://pi.dev/logo-auto.svg" width="128">
-  </a>
+  <img alt="Euler" src="assets/euler-logo.svg" width="120">
 </p>
+
+<h1 align="center">Euler</h1>
+
+<p align="center"><strong>A superset of Pi, tuned for vim-native terminal work.</strong></p>
+
 <p align="center">
-  <a href="https://discord.com/invite/3cU7Bz4UPx"><img alt="Discord" src="https://img.shields.io/badge/discord-community-5865F2?style=flat-square&logo=discord&logoColor=white" /></a>
-  <a href="https://www.npmjs.com/package/@earendil-works/pi-coding-agent"><img alt="npm" src="https://img.shields.io/npm/v/@earendil-works/pi-coding-agent?style=flat-square" /></a>
+  <a href="docs/euler/README.md">Keys</a> ·
+  <a href="docs/euler/CODE-REVIEW.md">Review &amp; next steps</a> ·
+  <a href="docs/euler/PERFORMANCE.md">Performance</a> ·
+  <a href="docs/euler/DOGFOOD.md">Dogfooding</a>
 </p>
 
-> New issues and PRs from new contributors are auto-closed by default. Maintainers review auto-closed issues daily. See [CONTRIBUTING.md](CONTRIBUTING.md).
+Euler is [Pi](https://github.com/earendil-works/pi) plus a modal, keyboard-first surface for
+development work in a terminal. Everything Pi does, Euler still does — same tools, extensions,
+skills, MCP servers, codemode, models and credentials — because it reads the same `~/.pi/agent`.
 
-# Pi
+**What Euler adds over Pi**
 
-> **euler fork:** this repository is a fork of pi that adds a modal, vim-flavoured interaction
-> layer (`pi --ui euler`, or the `euler` binary). See [docs/euler](docs/euler/README.md) for keys,
-> the fork/quote model, the architecture seams, and the upstream update gate.
-> Latest code review and next steps: [docs/euler/CODE-REVIEW.md](docs/euler/CODE-REVIEW.md).
-> Everything below still describes upstream pi.
+| | |
+|---|---|
+| **Modal transcript** | normal/visual modes over rendered output: `hjkl`, `w/b/e`, `W/B/E`, `gg/G`, `H/M/L`, `{ }`, counts, `Ctrl-d/u/f/b`, `/` search |
+| **Quotes** | select output and quote it: a persistent `custom_message` that becomes part of the conversation's context, with provenance |
+| **Threads** | fork a session at any point into a new one that inherits the full branch (compaction included); a rail lists threads with parent lineage |
+| **ADE surface** | persistent thread rail (`<space>e`), external editor handoff (`:e`, `ctrl+g`), `@file` mentions, `:new` / `:fork` / `:threads` |
+| **Signal** | lualine-style statusline: mode block, position, session, fork parent, live indicator, unread markers |
+| **Durable fork** | `tools/euler/upstream-gate.mjs` classifies upstream drift as safe / review / blocked before you merge a Pi release |
+| **Dogfooding** | `npm run dev` restarts from source on save and resumes the session — no build step |
+
+**Pi stays Pi.** `pi` is stock Pi; the modal layer only runs through the `euler` binary (or the
+explicit `pi --ui euler` flag). No environment variable changes what `pi` is.
+
+## Run it
+
+```bash
+npm install
+npm run build
+ln -s "$PWD/bin/euler" ~/.local/bin/euler
+euler                       # bun when available, node otherwise
+euler --continue            # resume this directory's last session
+npm run dev                 # dev loop: source mode, reload on save
+```
+
+Full guide: [docs/euler/README.md](docs/euler/README.md) — keys, quote/fork model, command line,
+and the architecture seams that keep this fork mergeable.
+
+---
+
+## Upstream Pi
+
+The rest of this file is Pi's own README, unchanged. Where it says "Pi", read "the harness Euler is
+built on"; where it points at docs, those docs apply here too.
 
 Pi is a minimal, extensible agent harness that you can make your own.
 

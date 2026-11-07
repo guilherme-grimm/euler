@@ -146,6 +146,7 @@ import {
 	type SidebarThread,
 } from "../euler/euler-sidebar.ts";
 import { EulerStatusLine } from "../euler/euler-status.ts";
+import { EULER_APP_NAME } from "../euler/identity.ts";
 import { reportBug } from "./bug-report.ts";
 import { createChatViewport } from "./chat-viewport.ts";
 import { ArminComponent } from "./components/armin.ts";
@@ -1202,9 +1203,9 @@ export class InteractiveMode {
 		const cwdBasename = path.basename(this.sessionManager.getCwd());
 		const sessionName = this.sessionManager.getSessionName();
 		if (sessionName) {
-			this.ui.terminal.setTitle(`${APP_TITLE} - ${sessionName} - ${cwdBasename}`);
+			this.ui.terminal.setTitle(`${this.appTitle()} - ${sessionName} - ${cwdBasename}`);
 		} else {
-			this.ui.terminal.setTitle(`${APP_TITLE} - ${cwdBasename}`);
+			this.ui.terminal.setTitle(`${this.appTitle()} - ${cwdBasename}`);
 		}
 	}
 
@@ -7278,6 +7279,11 @@ export class InteractiveMode {
 
 	private eulerEnabled(): boolean {
 		return this.options.ui === "euler";
+	}
+
+	/** Window title. Euler brands its own window without renaming the whole application. */
+	private appTitle(): string {
+		return this.eulerEnabled() ? EULER_APP_NAME : APP_TITLE;
 	}
 
 	private getEulerStatusLine(): EulerStatusLine {

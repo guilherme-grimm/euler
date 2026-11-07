@@ -1,8 +1,13 @@
-# euler
+<p align="center">
+  <img alt="Euler" src="../../assets/euler-logo.svg" width="96">
+</p>
 
-Euler is a fork of [pi](https://github.com/earendil-works/pi) that adds a modal, vim-flavoured
-interaction layer over the fullscreen transcript. It is a drop-in replacement: same
-`~/.pi/agent` directory, same sessions, auth, models, skills, extensions, MCP and codemode.
+# Euler
+
+Euler is a **superset of [Pi](https://github.com/earendil-works/pi)** that adds a modal,
+vim-flavoured interaction layer over the fullscreen transcript. It is a drop-in replacement: same
+`~/.pi/agent` directory, same sessions, auth, models, skills, extensions, MCP and codemode. `pi`
+itself stays stock Pi — the layer runs through the `euler` binary or the explicit `--ui euler`.
 
 Status: **MVP**. Modal navigation, visual selection, persistent quotes and thread forking work.
 The input editor is still plain insert mode (see [Roadmap](#roadmap)).

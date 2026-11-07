@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="euler-logo-title">
+	<title id="euler-logo-title">Euler</title>
+	<rect width="256" height="256" rx="56" fill="#0f141b" />
+	<rect x="9" y="9" width="238" height="238" rx="48" fill="none" stroke="#2a3441" stroke-width="2.5" />
+	<!-- prompt -->
+	<path d="M54 92 L86 118 L54 144" fill="none" stroke="#5ec8c8" stroke-width="11" stroke-linecap="round" stroke-linejoin="round" />
+	<!-- e -->
+	<text
+		x="104"
+		y="156"
+		font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+		font-size="104"
+		font-weight="700"
+		letter-spacing="-4"
+		fill="#e8edf4"
+	>e</text>
+	<!-- cursor -->
+	<rect x="180" y="112" width="15" height="46" rx="3" fill="#5ec8c8" />
+	<!-- fork -->
+	<path d="M56 198 H104" stroke="#39434f" stroke-width="6" stroke-linecap="round" />
+	<path d="M104 198 V214" stroke="#39434f" stroke-width="6" stroke-linecap="round" />
+	<path d="M104 198 H196" stroke="#39434f" stroke-width="6" stroke-linecap="round" />
+	<circle cx="104" cy="198" r="8" fill="#5ec8c8" fill-opacity="0.85" />
+	<circle cx="196" cy="198" r="8" fill="#e8edf4" fill-opacity="0.55" />
+</svg>
