@@ -21,6 +21,6 @@ fi
 
 runtime=${EULER_RUNTIME:-auto}
 if [ "$runtime" != "node" ] && command -v bun >/dev/null 2>&1; then
-	EULER=1 exec bun "$cli" "$@"
+	exec bun "$cli" --ui euler "$@"
 fi
-EULER=1 exec node "$cli" "$@"
+exec node "$cli" --ui euler "$@"

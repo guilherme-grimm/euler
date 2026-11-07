@@ -39,8 +39,7 @@ Link the launcher, which prefers `bun` and falls back to `node`:
 ln -s "$PWD/bin/euler" ~/.local/bin/euler
 euler                    # equivalent to: pi --ui euler, run under bun when available
 EULER_RUNTIME=node euler # force node
-EULER=1 pi               # same thing without the launcher
-pi --ui euler            # explicit
+pi --ui euler            # explicit opt-in; plain `pi` stays stock Pi
 ```
 
 Bun starts this configuration in ~250 ms vs ~620 ms on node (TypeScript extensions compile
