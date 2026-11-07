@@ -10,7 +10,8 @@
   <a href="docs/euler/README.md">Keys</a> ·
   <a href="docs/euler/CODE-REVIEW.md">Review &amp; next steps</a> ·
   <a href="docs/euler/PERFORMANCE.md">Performance</a> ·
-  <a href="docs/euler/DOGFOOD.md">Dogfooding</a>
+  <a href="docs/euler/DOGFOOD.md">Dogfooding</a> ·
+  <a href="docs/euler/CI.md">CI</a>
 </p>
 
 Euler is [Pi](https://github.com/earendil-works/pi) plus a modal, keyboard-first surface for
