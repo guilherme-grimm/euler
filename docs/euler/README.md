@@ -79,7 +79,7 @@ normal mode; `i` returns to insert.
 | normal | `<space>t` | session tree navigator |
 | normal | `<space>f` | fork |
 | normal | `<space>h` or `?` | cheatsheet (vim-style float) |
-| normal | `i` / `A` | back to insert (editor) |
+| normal | `i` / `a` | back to insert (editor) |
 | normal | `:` | command line (see below) |
 | normal | `Esc` | clear pending prefix/count, or abort a streaming turn |
 

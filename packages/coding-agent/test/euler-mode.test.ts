@@ -433,11 +433,11 @@ describe("EulerMode", () => {
 		assert.deepEqual(recorded.opened, ["showSidebar", "leaveSidebar"]);
 	});
 
-	it("enters insert with A and quits from the command line", async () => {
+	it("enters insert with a and quits from the command line", async () => {
 		const { terminal, recorded, mode } = setup();
 		await settle(terminal);
 		terminal.sendInput("\x1b");
-		terminal.sendInput("A");
+		terminal.sendInput("a");
 		await settle(terminal);
 		assert.equal(mode.statusData().mode, "insert");
 
