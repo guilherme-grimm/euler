@@ -17,8 +17,10 @@ export interface EulerStatusData {
 	/** Name/id of the session this thread was forked from, when there is one. */
 	parent?: string;
 	streaming: boolean;
-	/** Pending count/prefix, e.g. "3j". */
+	/** Pending count/prefix, e.g. "3j" or "<space>". */
 	pending?: string;
+	/** Which-key continuations for the pending prefix. */
+	hint?: string;
 	message?: string;
 }
 
@@ -52,6 +54,7 @@ export class EulerStatusLine implements Component {
 		const parts: string[] = [];
 		parts.push(theme.fg("muted", `${data.line}/${data.total}`));
 		if (data.pending) parts.push(theme.fg("warning", data.pending));
+		if (data.hint) parts.push(theme.fg("dim", data.hint));
 		parts.push(theme.fg("text", data.sessionName));
 		if (data.parent) parts.push(theme.fg("dim", `forked from ${data.parent}`));
 		if (data.streaming) parts.push(theme.fg("warning", "working"));

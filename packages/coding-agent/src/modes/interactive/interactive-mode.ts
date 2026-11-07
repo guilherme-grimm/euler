@@ -926,6 +926,11 @@ export class InteractiveMode {
 	}
 
 	private stopInteractiveTui(fullscreenExitOutput: FullscreenExitOutput): void {
+		// Euler has no regular-mode fallback, so it never dumps the transcript back into the shell.
+		if (this.eulerEnabled()) {
+			this.ui.stop({ preserveScreen: true });
+			return;
+		}
 		if (this.renderer.mode === "fullscreen" && fullscreenExitOutput === "transcript") {
 			while (this.renderer.hasOverlayEntries) this.renderer.hideOverlay();
 			this.switchTuiMode("regular", false, false);

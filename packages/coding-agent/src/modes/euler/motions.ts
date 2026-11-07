@@ -1,12 +1,12 @@
 /**
  * Pure text motions over the rendered transcript.
  *
- * Columns are terminal cells, not code units, so wide characters and combining marks behave
- * the same in the cursor as they do on screen. Lines are ANSI-stripped transcript rows and are
- * measured lazily: a keystroke only pays for the lines it touches.
+ * Columns are terminal cells, not code units, so wide graphemes and combining marks behave the
+ * same in the cursor as they do on screen. Rows are ANSI-stripped lazily and cached: a keystroke
+ * only pays for the lines it touches, not for the whole transcript.
  */
 
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 
 export interface Cursor {
 	row: number;
@@ -22,10 +22,12 @@ export interface Cell {
 
 const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
-/** Word classes, following vim's `iskeyword` split: blank, word, punctuation. */
+/** Word classes, following vim's split: blank, keyword (letters/digits/_), punctuation. */
 const BLANK = 0;
 const WORD = 1;
 const PUNCT = 2;
+
+type Classifier = (char: string) => number;
 
 function classOf(char: string): number {
 	if (/\s/.test(char)) return BLANK;
@@ -33,20 +35,35 @@ function classOf(char: string): number {
 	return PUNCT;
 }
 
-export class MotionDoc {
-	private readonly cache = new Map<number, Cell[]>();
-	readonly lines: readonly string[];
+/** WORD motion: only whitespace separates words. */
+function bigClassOf(char: string): number {
+	return /\s/.test(char) ? BLANK : WORD;
+}
 
-	constructor(lines: readonly string[]) {
-		this.lines = lines;
+function stripTranscriptLine(line: string): string {
+	// OSC 133 prompt markers carry no text; strip them along with styling.
+	return stripTerminalSequences(line).replace(/\x1b\]133;[ABC](?:\x07|\x1b\\)/g, "");
+}
+
+export class MotionDoc {
+	private readonly raw: readonly string[];
+	private readonly stripped = new Map<number, string>();
+	private readonly cellCache = new Map<number, Cell[]>();
+
+	constructor(rawLines: readonly string[]) {
+		this.raw = rawLines;
 	}
 
 	get lineCount(): number {
-		return this.lines.length;
+		return this.raw.length;
 	}
 
 	text(row: number): string {
-		return this.lines[row] ?? "";
+		const cached = this.stripped.get(row);
+		if (cached !== undefined) return cached;
+		const text = stripTranscriptLine(this.raw[row] ?? "");
+		this.stripped.set(row, text);
+		return text;
 	}
 
 	width(row: number): number {
@@ -57,16 +74,16 @@ export class MotionDoc {
 	}
 
 	cells(row: number): Cell[] {
-		const cached = this.cache.get(row);
+		const cached = this.cellCache.get(row);
 		if (cached) return cached;
 		const cells: Cell[] = [];
 		let column = 0;
-		for (const { segment } of segmenter.segment(this.lines[row] ?? "")) {
+		for (const { segment } of segmenter.segment(this.text(row))) {
 			const width = visibleWidth(segment);
 			cells.push({ char: segment, cell: column, width });
 			column += width;
 		}
-		this.cache.set(row, cells);
+		this.cellCache.set(row, cells);
 		return cells;
 	}
 
@@ -84,24 +101,15 @@ export class MotionDoc {
 		return low;
 	}
 
-	cellOf(row: number, index: number): number {
-		const cells = this.cells(row);
-		if (cells.length === 0) return 0;
-		const clamped = Math.max(0, Math.min(cells.length - 1, index));
-		return cells[clamped].cell;
-	}
-
 	/** Last selectable cell column of a row (vim keeps the cursor on the final grapheme). */
 	lastCol(row: number): number {
 		const cells = this.cells(row);
 		if (cells.length === 0) return 0;
-		const last = cells[cells.length - 1];
-		return last.cell;
+		return cells[cells.length - 1].cell;
 	}
 
 	firstNonBlank(row: number): number {
-		const cells = this.cells(row);
-		for (const cell of cells) {
+		for (const cell of this.cells(row)) {
 			if (classOf(cell.char) !== BLANK) return cell.cell;
 		}
 		return 0;
@@ -115,9 +123,8 @@ export class MotionDoc {
 
 	/** Text covering a cell range on one row, for copy/quote. */
 	sliceText(row: number, startCol: number, endCol: number): string {
-		const cells = this.cells(row);
 		let text = "";
-		for (const cell of cells) {
+		for (const cell of this.cells(row)) {
 			if (cell.cell < startCol) continue;
 			if (cell.cell > endCol) break;
 			text += cell.char;
@@ -132,6 +139,95 @@ export class MotionDoc {
 		}
 		return 0;
 	}
+}
+
+function wordForward(doc: MotionDoc, cursor: Cursor, classify: Classifier): Cursor {
+	let { row, col } = cursor;
+	for (let guard = 0; guard < doc.lineCount + 1; guard++) {
+		const cells = doc.cells(row);
+		if (cells.length === 0) {
+			if (row + 1 >= doc.lineCount) return cursor;
+			row += 1;
+			col = 0;
+			continue;
+		}
+		let index = doc.indexAt(row, col);
+		const current = classify(cells[index].char);
+		if (current !== BLANK) {
+			while (index < cells.length && classify(cells[index].char) === current) index += 1;
+		}
+		while (index < cells.length && classify(cells[index].char) === BLANK) index += 1;
+		if (index >= cells.length) {
+			// Crossing a line boundary lands on the first non-blank of the next line, like vim.
+			if (row + 1 >= doc.lineCount) return { row, col };
+			row += 1;
+			return { row, col: doc.firstNonBlank(row) };
+		}
+		return { row, col: cells[index].cell };
+	}
+	return cursor;
+}
+
+function wordBackward(doc: MotionDoc, cursor: Cursor, classify: Classifier): Cursor {
+	let { row, col } = cursor;
+	for (let guard = 0; guard < doc.lineCount + 1; guard++) {
+		const cells = doc.cells(row);
+		if (cells.length === 0) {
+			if (row === 0) return cursor;
+			row -= 1;
+			col = doc.lastCol(row);
+			continue;
+		}
+		let index = doc.indexAt(row, col);
+		if (index > 0 || classify(cells[index].char) === BLANK) {
+			if (index > 0) index -= 1;
+			while (index > 0 && classify(cells[index].char) === BLANK) index -= 1;
+			if (classify(cells[index].char) === BLANK) continue;
+			const current = classify(cells[index].char);
+			while (index > 0 && classify(cells[index - 1].char) === current) index -= 1;
+			return { row, col: cells[index].cell };
+		}
+		if (row === 0) return cursor;
+		row -= 1;
+		col = doc.lastCol(row);
+	}
+	return cursor;
+}
+
+function wordEnd(doc: MotionDoc, cursor: Cursor, classify: Classifier): Cursor {
+	let { row, col } = cursor;
+	for (let guard = 0; guard < doc.lineCount + 1; guard++) {
+		const cells = doc.cells(row);
+		if (cells.length === 0) {
+			if (row + 1 >= doc.lineCount) return cursor;
+			row += 1;
+			col = 0;
+			continue;
+		}
+		let index = doc.indexAt(row, col) + 1;
+		while (index < cells.length && classify(cells[index].char) === BLANK) index += 1;
+		if (index >= cells.length) {
+			if (row + 1 >= doc.lineCount) return doc.clamp({ row, col });
+			row += 1;
+			col = 0;
+			continue;
+		}
+		const current = classify(cells[index].char);
+		while (index + 1 < cells.length && classify(cells[index + 1].char) === current) index += 1;
+		return { row, col: cells[index].cell };
+	}
+	return cursor;
+}
+
+function repeat(
+	doc: MotionDoc,
+	cursor: Cursor,
+	count: number,
+	step: (doc: MotionDoc, cursor: Cursor) => Cursor,
+): Cursor {
+	let next = doc.clamp(cursor);
+	for (let i = 0; i < count; i++) next = step(doc, next);
+	return next;
 }
 
 export function moveLeft(doc: MotionDoc, cursor: Cursor, count: number): Cursor {
@@ -155,100 +251,27 @@ export function moveDown(doc: MotionDoc, cursor: Cursor, count: number, desiredC
 }
 
 export function moveWordForward(doc: MotionDoc, cursor: Cursor, count: number): Cursor {
-	let next = doc.clamp(cursor);
-	for (let i = 0; i < count; i++) next = wordForward(doc, next);
-	return next;
-}
-
-function wordForward(doc: MotionDoc, cursor: Cursor): Cursor {
-	let { row, col } = cursor;
-	for (let guard = 0; guard < doc.lineCount + 1; guard++) {
-		const cells = doc.cells(row);
-		if (cells.length === 0) {
-			if (row + 1 >= doc.lineCount) return cursor;
-			row += 1;
-			col = 0;
-			continue;
-		}
-		let index = doc.indexAt(row, col);
-		const current = classOf(cells[index].char);
-		if (current !== BLANK) {
-			while (index < cells.length && classOf(cells[index].char) === current) index += 1;
-		}
-		while (index < cells.length && classOf(cells[index].char) === BLANK) index += 1;
-		if (index >= cells.length) {
-			// Crossing a line boundary lands on the first non-blank of the next line, like vim.
-			if (row + 1 >= doc.lineCount) return { row, col };
-			row += 1;
-			return { row, col: doc.firstNonBlank(row) };
-		}
-		return { row, col: cells[index].cell };
-	}
-	return cursor;
+	return repeat(doc, cursor, count, (d, c) => wordForward(d, c, classOf));
 }
 
 export function moveWordBackward(doc: MotionDoc, cursor: Cursor, count: number): Cursor {
-	let next = doc.clamp(cursor);
-	for (let i = 0; i < count; i++) next = wordBackward(doc, next);
-	return next;
-}
-
-function wordBackward(doc: MotionDoc, cursor: Cursor): Cursor {
-	let { row, col } = cursor;
-	for (let guard = 0; guard < doc.lineCount + 1; guard++) {
-		const cells = doc.cells(row);
-		if (cells.length === 0) {
-			if (row === 0) return cursor;
-			row -= 1;
-			col = doc.lastCol(row);
-			continue;
-		}
-		let index = doc.indexAt(row, col);
-		if (index > 0 || classOf(cells[index].char) === BLANK) {
-			if (index > 0) index -= 1;
-			while (index > 0 && classOf(cells[index].char) === BLANK) index -= 1;
-			if (classOf(cells[index].char) === BLANK) continue;
-			const current = classOf(cells[index].char);
-			while (index > 0 && classOf(cells[index - 1].char) === current) index -= 1;
-			return { row, col: cells[index].cell };
-		}
-		if (row === 0) return cursor;
-		row -= 1;
-		col = doc.lastCol(row);
-	}
-	return cursor;
+	return repeat(doc, cursor, count, (d, c) => wordBackward(d, c, classOf));
 }
 
 export function moveWordEnd(doc: MotionDoc, cursor: Cursor, count: number): Cursor {
-	let next = doc.clamp(cursor);
-	for (let i = 0; i < count; i++) next = wordEnd(doc, next);
-	return next;
+	return repeat(doc, cursor, count, (d, c) => wordEnd(d, c, classOf));
 }
 
-function wordEnd(doc: MotionDoc, cursor: Cursor): Cursor {
-	let { row, col } = cursor;
-	for (let guard = 0; guard < doc.lineCount + 1; guard++) {
-		const cells = doc.cells(row);
-		if (cells.length === 0) {
-			if (row + 1 >= doc.lineCount) return cursor;
-			row += 1;
-			col = 0;
-			continue;
-		}
-		let index = doc.indexAt(row, col);
-		index += 1;
-		while (index < cells.length && classOf(cells[index].char) === BLANK) index += 1;
-		if (index >= cells.length) {
-			if (row + 1 >= doc.lineCount) return doc.clamp({ row, col });
-			row += 1;
-			col = 0;
-			continue;
-		}
-		const current = classOf(cells[index].char);
-		while (index + 1 < cells.length && classOf(cells[index + 1].char) === current) index += 1;
-		return { row, col: cells[index].cell };
-	}
-	return cursor;
+export function moveBigWordForward(doc: MotionDoc, cursor: Cursor, count: number): Cursor {
+	return repeat(doc, cursor, count, (d, c) => wordForward(d, c, bigClassOf));
+}
+
+export function moveBigWordBackward(doc: MotionDoc, cursor: Cursor, count: number): Cursor {
+	return repeat(doc, cursor, count, (d, c) => wordBackward(d, c, bigClassOf));
+}
+
+export function moveBigWordEnd(doc: MotionDoc, cursor: Cursor, count: number): Cursor {
+	return repeat(doc, cursor, count, (d, c) => wordEnd(d, c, bigClassOf));
 }
 
 export function moveLineStart(doc: MotionDoc, cursor: Cursor): Cursor {
@@ -267,8 +290,9 @@ export function moveDocStart(doc: MotionDoc, _cursor: Cursor): Cursor {
 	return { row: 0, col: doc.firstNonBlank(0) };
 }
 
-export function moveDocEnd(doc: MotionDoc, _cursor: Cursor): Cursor {
-	const row = doc.lastContentRow();
+export function moveDocEnd(doc: MotionDoc, _cursor: Cursor, count = 1): Cursor {
+	// `3G` jumps to line 3; a bare `G` goes to the last content line.
+	const row = count > 1 ? Math.min(count - 1, doc.lineCount - 1) : doc.lastContentRow();
 	return { row, col: doc.firstNonBlank(row) };
 }
 
@@ -304,7 +328,7 @@ export function linewiseRange(anchorRow: number, cursorRow: number): LineRange {
 		: { startRow: cursorRow, endRow: anchorRow };
 }
 
-/** Text of a rectangular (character-wise) selection, one entry per row. */
+/** Text of a character-wise selection, one entry per row, both endpoints inclusive. */
 export function characterwiseText(
 	doc: MotionDoc,
 	anchor: Cursor,

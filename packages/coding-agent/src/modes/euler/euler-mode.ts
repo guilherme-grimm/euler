@@ -4,15 +4,17 @@
  * The layer stays out of the renderer's way: it owns a keyboard cursor in transcript content
  * space, paints it through `TuiAltScreen.setKeyboardState`, and only consumes keys while in
  * normal/visual mode so insert mode keeps Pi's editor untouched.
+ *
+ * Dispatch comes from `keymap.ts`, which also feeds the which-key hints and the cheatsheet.
  */
 
 import {
 	Box,
+	type Component,
 	Input,
 	matchesKey,
 	type OverlayHandle,
 	type ScrollView,
-	stripTerminalSequences,
 	Text,
 	type TUI,
 	type TuiAltScreen,
@@ -21,10 +23,21 @@ import {
 import { theme } from "../interactive/theme/theme.ts";
 import type { EulerModeName, EulerStatusData } from "./euler-status.ts";
 import {
+	canonicalKey,
+	cheatsheetSections,
+	describeContinuations,
+	displayKeys,
+	type EulerAction,
+	matchKeymap,
+} from "./keymap.ts";
+import {
 	type Cursor,
 	characterwiseText,
 	linewiseText,
 	MotionDoc,
+	moveBigWordBackward,
+	moveBigWordEnd,
+	moveBigWordForward,
 	moveDocEnd,
 	moveDocStart,
 	moveDown,
@@ -70,10 +83,7 @@ export interface EulerHost {
 }
 
 const SCROLL_OFF = 10;
-
-function stripMarkers(line: string): string {
-	return stripTerminalSequences(line).replace(/\x1b\]133;[ABC](?:\x07|\x1b\\)/g, "");
-}
+const PAGE_OVERLAP = 2;
 
 export class EulerMode {
 	private mode: EulerModeName = "insert";
@@ -82,12 +92,14 @@ export class EulerMode {
 	private linewise = false;
 	private desiredCol?: number;
 	private count = 0;
-	private pending: "" | "g" | "y" | "leader" = "";
+	private pendingTokens: string[] = [];
+	private pendingHint = "";
 	private searchQuery = "";
 	private searchMatches: Cursor[] = [];
 	private searchIndex = -1;
 	private message = "";
 	private overlay?: OverlayHandle;
+	private backdrop?: OverlayHandle;
 	private detach?: () => void;
 	private readonly host: EulerHost;
 
@@ -97,6 +109,8 @@ export class EulerMode {
 
 	attach(): void {
 		this.detach = this.host.ui.addInputListener((data) => this.handleInput(data));
+		// First-run discoverability: cleared as soon as the user presses anything.
+		this.message = "Esc for vim mode · ? for keys";
 		this.syncCursor({ jumpToBottom: true });
 	}
 
@@ -106,11 +120,14 @@ export class EulerMode {
 		this.host.renderer.setKeyboardState(undefined);
 		this.overlay?.hide();
 		this.overlay = undefined;
+		this.backdrop?.hide();
+		this.backdrop = undefined;
 	}
 
 	statusData(): EulerStatusData {
 		const total = this.host.renderer.getViewportSnapshot(this.host.transcript)?.lines.length ?? 0;
-		const pending = this.count > 0 || this.pending ? `${this.pending}${this.count || ""}` : undefined;
+		const count = this.count > 0 ? String(this.count) : "";
+		const pending = this.pendingTokens.length > 0 ? displayKeys(this.pendingTokens.join(" ")) : "";
 		return {
 			mode: this.mode,
 			line: Math.min(this.cursor.row + 1, Math.max(1, total)),
@@ -118,17 +135,22 @@ export class EulerMode {
 			sessionName: this.host.sessionName(),
 			parent: this.host.parentName(),
 			streaming: this.host.isStreaming(),
-			pending,
+			pending: `${pending}${count}` || undefined,
+			hint: this.pendingHint || undefined,
 			message: this.message || undefined,
 		};
 	}
 
-	/** Re-read the transcript snapshot into a motion document. */
+	/** Transcript snapshot as a lazily-stripped motion document. */
 	private doc(): MotionDoc | undefined {
 		const snapshot = this.host.renderer.getViewportSnapshot(this.host.transcript);
+		return snapshot ? new MotionDoc(snapshot.lines) : undefined;
+	}
+
+	private viewport(): { top: number; height: number; total: number } | undefined {
+		const snapshot = this.host.renderer.getViewportSnapshot(this.host.transcript);
 		if (!snapshot) return undefined;
-		const lines = snapshot.lines.map(stripMarkers);
-		return new MotionDoc(lines);
+		return { top: snapshot.top, height: snapshot.height, total: snapshot.lines.length };
 	}
 
 	private handleInput(data: string): { consume?: boolean } | undefined {
@@ -140,6 +162,7 @@ export class EulerMode {
 			}
 			return undefined;
 		}
+		// Fast typing can arrive as one chunk; treat printable runs as individual vim keys.
 		if (data.length > 1 && /^[\x20-\x7e]+$/.test(data)) {
 			let consume = true;
 			for (const char of data) {
@@ -155,233 +178,236 @@ export class EulerMode {
 		return result;
 	}
 
-	private handleVimKey(key: string): { consume?: boolean } | undefined {
+	private handleVimKey(data: string): { consume?: boolean } | undefined {
 		this.message = "";
-		if (matchesKey(key, "escape")) {
+		const key = canonicalKey(data);
+		if (!key) return undefined;
+
+		if (key === "escape") {
 			if (this.mode === "visual") {
 				this.exitVisual();
 				return { consume: true };
 			}
-			if (this.pending || this.count > 0) {
+			if (this.pendingTokens.length > 0 || this.count > 0) {
 				this.clearPending();
 				this.syncCursor();
 				return { consume: true };
 			}
 			// Esc aborts a running turn, as it does in Pi; otherwise it is a no-op in normal mode.
 			if (this.host.isStreaming()) return undefined;
-			this.message = "";
+			this.clearPending();
 			this.syncCursor();
 			return { consume: true };
 		}
 
-		// Counts: 1-9 always, 0 only when a count is in progress.
-		if (/^[1-9]$/.test(key) || (key === "0" && this.count > 0)) {
+		// Counts: 1-9 always, 0 only when a count is already in progress.
+		if (/^[1-9]$/.test(key) || (key === "0" && this.count > 0 && this.pendingTokens.length === 0)) {
 			this.count = this.count * 10 + Number(key);
 			this.syncCursor();
 			return { consume: true };
 		}
-		const count = this.count || 1;
 
-		if (this.pending === "g") {
-			this.pending = "";
-			this.clearCount();
-			const doc = this.doc();
-			if (!doc) return { consume: true };
-			if (key === "g") this.cursor = moveDocStart(doc, this.cursor);
-			else this.message = `unsupported: g${key}`;
-			this.afterMotion(doc);
+		const bindingMode = this.mode === "visual" ? "visual" : "normal";
+		const pressed = [...this.pendingTokens, key];
+		const match = matchKeymap(pressed, bindingMode);
+
+		if (match.exact && match.prefixes.length === 0) {
+			const count = this.count || 1;
+			this.clearPending();
+			this.runAction(match.exact.action, count);
 			return { consume: true };
 		}
-
-		if (this.pending === "y") {
-			this.pending = "";
-			this.clearCount();
-			if (key === "y") void this.yankCurrentLine();
+		if (match.prefixes.length > 0) {
+			this.pendingTokens = pressed;
+			this.pendingHint = describeContinuations(match.prefixes);
 			this.syncCursor();
 			return { consume: true };
 		}
 
-		if (this.pending === "leader") {
-			this.pending = "";
-			this.clearCount();
-			if (key === "s") this.host.openSessions();
-			else if (key === "t") this.host.openTree();
-			else if (key === "f") void this.forkAtLeaf();
-			else if (key === "?") this.showHelp();
-			else this.message = `no mapping: <space>${key}`;
-			this.syncCursor();
-			return { consume: true };
-		}
+		const pressedLabel = displayKeys(pressed.join(" "));
+		this.clearPending();
+		this.message = `${pressedLabel} is unmapped — ? for keys`;
+		this.syncCursor();
+		return { consume: true };
+	}
 
+	private runAction(action: EulerAction, count: number): void {
 		const doc = this.doc();
-		if (!doc) {
+		if (!doc && action !== "help" && action !== "sessions" && action !== "tree" && action !== "insert") {
 			this.message = "no transcript yet";
-			return { consume: true };
+			return;
 		}
-
-		switch (key) {
-			case "i":
-			case "a":
-			case "A":
-			case "o":
-			case "O":
-				this.clearPending();
-				this.enterInsert();
-				return { consume: true };
-			case "j":
-				this.cursor = moveDown(doc, this.cursor, count, this.desiredCol);
-				this.afterMotion(doc);
-				return { consume: true };
-			case "k":
-				this.cursor = moveUp(doc, this.cursor, count, this.desiredCol);
-				this.afterMotion(doc);
-				return { consume: true };
-			case "h":
-				this.cursor = moveLeft(doc, this.cursor, count);
+		switch (action) {
+			case "down":
+				this.cursor = moveDown(doc as MotionDoc, this.cursor, count, this.desiredCol);
+				this.afterMotion(doc as MotionDoc);
+				return;
+			case "up":
+				this.cursor = moveUp(doc as MotionDoc, this.cursor, count, this.desiredCol);
+				this.afterMotion(doc as MotionDoc);
+				return;
+			case "left":
+				this.cursor = moveLeft(doc as MotionDoc, this.cursor, count);
 				this.desiredCol = undefined;
-				this.afterMotion(doc);
-				return { consume: true };
-			case "l":
-				this.cursor = moveRight(doc, this.cursor, count);
+				this.afterMotion(doc as MotionDoc);
+				return;
+			case "right":
+				this.cursor = moveRight(doc as MotionDoc, this.cursor, count);
 				this.desiredCol = undefined;
-				this.afterMotion(doc);
-				return { consume: true };
-			case "w":
-				this.cursor = moveWordForward(doc, this.cursor, count);
-				this.afterMotion(doc);
-				return { consume: true };
-			case "b":
-				this.cursor = moveWordBackward(doc, this.cursor, count);
-				this.afterMotion(doc);
-				return { consume: true };
-			case "e":
-				this.cursor = moveWordEnd(doc, this.cursor, count);
-				this.afterMotion(doc);
-				return { consume: true };
-			case "0":
-				this.cursor = moveLineStart(doc, this.cursor);
+				this.afterMotion(doc as MotionDoc);
+				return;
+			case "wordForward":
+				this.cursor = moveWordForward(doc as MotionDoc, this.cursor, count);
+				this.afterMotion(doc as MotionDoc);
+				return;
+			case "wordBackward":
+				this.cursor = moveWordBackward(doc as MotionDoc, this.cursor, count);
+				this.afterMotion(doc as MotionDoc);
+				return;
+			case "wordEnd":
+				this.cursor = moveWordEnd(doc as MotionDoc, this.cursor, count);
+				this.afterMotion(doc as MotionDoc);
+				return;
+			case "bigWordForward":
+				this.cursor = moveBigWordForward(doc as MotionDoc, this.cursor, count);
+				this.afterMotion(doc as MotionDoc);
+				return;
+			case "bigWordBackward":
+				this.cursor = moveBigWordBackward(doc as MotionDoc, this.cursor, count);
+				this.afterMotion(doc as MotionDoc);
+				return;
+			case "bigWordEnd":
+				this.cursor = moveBigWordEnd(doc as MotionDoc, this.cursor, count);
+				this.afterMotion(doc as MotionDoc);
+				return;
+			case "lineStart":
+				this.cursor = moveLineStart(doc as MotionDoc, this.cursor);
 				this.desiredCol = undefined;
-				this.afterMotion(doc);
-				return { consume: true };
-			case "^":
-				this.cursor = moveFirstNonBlank(doc, this.cursor);
-				this.afterMotion(doc);
-				return { consume: true };
-			case "$":
-				this.cursor = moveLineEnd(doc, this.cursor);
-				this.afterMotion(doc);
-				return { consume: true };
-			case "G":
-				this.cursor = moveDocEnd(doc, this.cursor);
-				this.afterMotion(doc);
-				return { consume: true };
-			case "g":
-				this.pending = "g";
-				this.syncCursor();
-				return { consume: true };
-			case "{":
-				this.cursor = moveParagraphUp(doc, this.cursor, count);
-				this.afterMotion(doc);
-				return { consume: true };
-			case "}":
-				this.cursor = moveParagraphDown(doc, this.cursor, count);
-				this.afterMotion(doc);
-				return { consume: true };
-			case "v":
-				this.clearCount();
+				this.afterMotion(doc as MotionDoc);
+				return;
+			case "firstNonBlank":
+				this.cursor = moveFirstNonBlank(doc as MotionDoc, this.cursor);
+				this.afterMotion(doc as MotionDoc);
+				return;
+			case "lineEnd":
+				this.cursor = moveLineEnd(doc as MotionDoc, this.cursor);
+				this.afterMotion(doc as MotionDoc);
+				return;
+			case "docStart":
+				this.cursor = moveDocStart(doc as MotionDoc, this.cursor);
+				this.afterMotion(doc as MotionDoc);
+				return;
+			case "docEnd":
+				this.cursor = moveDocEnd(doc as MotionDoc, this.cursor, count);
+				this.afterMotion(doc as MotionDoc);
+				return;
+			case "paragraphUp":
+				this.cursor = moveParagraphUp(doc as MotionDoc, this.cursor, count);
+				this.afterMotion(doc as MotionDoc);
+				return;
+			case "paragraphDown":
+				this.cursor = moveParagraphDown(doc as MotionDoc, this.cursor, count);
+				this.afterMotion(doc as MotionDoc);
+				return;
+			case "viewportTop":
+				this.jumpToViewportRow(0, count);
+				return;
+			case "viewportMiddle":
+				this.jumpToViewportRow(0.5, count);
+				return;
+			case "viewportBottom":
+				this.jumpToViewportRow(1, count);
+				return;
+			case "halfPageDown":
+				this.moveByViewport(Math.floor(this.pageSize() / 2) * count);
+				return;
+			case "halfPageUp":
+				this.moveByViewport(-Math.floor(this.pageSize() / 2) * count);
+				return;
+			case "pageDown":
+				this.moveByViewport(this.pageSize() * count);
+				return;
+			case "pageUp":
+				this.moveByViewport(-this.pageSize() * count);
+				return;
+			case "visualChar":
 				if (this.mode === "visual" && !this.linewise) this.exitVisual();
 				else this.startVisual(false);
-				return { consume: true };
-			case "V":
-				this.clearCount();
+				return;
+			case "visualLine":
 				if (this.mode === "visual" && this.linewise) this.exitVisual();
 				else this.startVisual(true);
-				return { consume: true };
-			case "y":
-				this.clearCount();
-				if (this.mode === "visual") {
-					void this.yankSelection();
-				} else {
-					this.pending = "y";
-					this.syncCursor();
-				}
-				return { consume: true };
-			case '"':
-			case "q":
-				this.clearPending();
+				return;
+			case "yank":
+				void this.yankSelection();
+				return;
+			case "yankLine":
+				void this.yankCurrentLine();
+				return;
+			case "quote":
 				void this.quoteSelection();
-				return { consume: true };
-			case "f":
-				this.clearPending();
+				return;
+			case "forkLeaf":
 				void this.forkAtLeaf();
-				return { consume: true };
-			case "F":
-				this.clearPending();
-				void this.forkBeforeCursor(doc);
-				return { consume: true };
-			case "/":
-				this.clearPending();
+				return;
+			case "forkPrompt":
+				void this.forkBeforeCursor(doc as MotionDoc);
+				return;
+			case "search":
 				this.openSearch();
-				return { consume: true };
-			case "n":
-				this.clearPending();
+				return;
+			case "nextMatch":
 				this.jumpToMatch(1);
-				return { consume: true };
-			case "N":
-				this.clearPending();
+				return;
+			case "previousMatch":
 				this.jumpToMatch(-1);
-				return { consume: true };
-			case "?":
-				this.clearPending();
+				return;
+			case "help":
 				this.showHelp();
-				return { consume: true };
-			case " ":
-				this.pending = "leader";
-				this.syncCursor();
-				return { consume: true };
-			default:
-				if (matchesKey(key, "ctrl+d")) {
-					this.cursor = moveDown(doc, this.cursor, this.halfPage(), this.desiredCol);
-					this.afterMotion(doc);
-					return { consume: true };
-				}
-				if (matchesKey(key, "ctrl+u")) {
-					this.cursor = moveUp(doc, this.cursor, this.halfPage(), this.desiredCol);
-					this.afterMotion(doc);
-					return { consume: true };
-				}
-				if (matchesKey(key, "ctrl+e")) {
-					this.cursor = moveDown(doc, this.cursor, 1, this.desiredCol);
-					this.afterMotion(doc);
-					return { consume: true };
-				}
-				if (matchesKey(key, "ctrl+y")) {
-					this.cursor = moveUp(doc, this.cursor, 1, this.desiredCol);
-					this.afterMotion(doc);
-					return { consume: true };
-				}
-				this.clearPending();
-				this.message = `unmapped: ${key}`;
-				this.syncCursor();
-				return { consume: true };
+				return;
+			case "insert":
+				this.enterInsert();
+				return;
+			case "sessions":
+				this.host.openSessions();
+				return;
+			case "tree":
+				this.host.openTree();
+				return;
 		}
 	}
 
-	private halfPage(): number {
-		const height = this.host.renderer.getViewportSnapshot(this.host.transcript)?.height ?? 20;
-		return Math.max(1, Math.floor(height / 2));
+	private pageSize(): number {
+		return Math.max(1, (this.viewport()?.height ?? 20) - PAGE_OVERLAP);
 	}
 
-	private clearCount(): void {
-		this.count = 0;
+	/** H/M/L: jump inside the visible window without changing scroll follow behaviour. */
+	private jumpToViewportRow(fraction: number, count: number): void {
+		const doc = this.doc();
+		const viewport = this.viewport();
+		if (!doc || !viewport) return;
+		const offset = fraction === 1 ? viewport.height - 1 : Math.floor((viewport.height - 1) * fraction);
+		const row = viewport.top + offset + (count > 1 ? (count - 1) * (offset || 1) : 0);
+		this.cursor = doc.clamp({ row, col: this.cursor.col });
+		this.afterMotion(doc);
+	}
+
+	private moveByViewport(lines: number): void {
+		const doc = this.doc();
+		if (!doc) return;
+		this.cursor = moveDown(doc, this.cursor, lines, this.desiredCol);
+		if (lines < 0) this.cursor = moveUp(doc, this.cursor, -lines, this.desiredCol);
+		this.afterMotion(doc);
 	}
 
 	private clearPending(): void {
-		this.pending = "";
+		this.pendingTokens = [];
+		this.pendingHint = "";
 		this.count = 0;
 	}
 
 	private enterInsert(): void {
+		this.clearPending();
 		this.mode = "insert";
 		this.anchor = undefined;
 		this.host.focusEditor();
@@ -391,11 +417,13 @@ export class EulerMode {
 
 	private enterNormal(): void {
 		this.mode = "normal";
+		this.clearPending();
 		this.host.blurEditor();
 		this.syncCursor({ jumpToBottom: true });
 	}
 
 	private startVisual(linewise: boolean): void {
+		this.clearPending();
 		this.mode = "visual";
 		this.linewise = linewise;
 		this.anchor = { ...this.cursor };
@@ -406,16 +434,13 @@ export class EulerMode {
 		this.mode = "normal";
 		this.anchor = undefined;
 		this.linewise = false;
+		this.clearPending();
 		this.syncCursor();
 	}
 
 	private afterMotion(doc: MotionDoc): void {
-		if (this.pending === "") this.count = 0;
 		this.desiredCol ??= this.cursor.col;
-		if (this.desiredCol !== undefined && this.cursor.col !== this.desiredCol) {
-			// Only keep the sticky column while the cursor is still clamped short of it.
-			if (this.cursor.col > this.desiredCol) this.desiredCol = this.cursor.col;
-		}
+		if (this.cursor.col > this.desiredCol) this.desiredCol = this.cursor.col;
 		this.cursor = doc.clamp(this.cursor);
 		this.syncCursor();
 	}
@@ -460,8 +485,7 @@ export class EulerMode {
 			const result = characterwiseText(doc, this.anchor, this.cursor);
 			return { text: result.text, rows: [result.startRow, result.endRow], label: "selection" };
 		}
-		const text = doc.text(this.cursor.row);
-		return { text, rows: [this.cursor.row, this.cursor.row], label: "line" };
+		return { text: doc.text(this.cursor.row), rows: [this.cursor.row, this.cursor.row], label: "line" };
 	}
 
 	private async yankSelection(): Promise<void> {
@@ -612,6 +636,8 @@ export class EulerMode {
 	private closeOverlay(): void {
 		this.overlay?.hide();
 		this.overlay = undefined;
+		this.backdrop?.hide();
+		this.backdrop = undefined;
 		this.mode = this.anchor ? "visual" : "normal";
 		if (this.mode === "normal") this.host.blurEditor();
 		this.syncCursor();
@@ -645,24 +671,67 @@ export class EulerMode {
 		this.syncCursor();
 	}
 
+	/** `?`: the cheatsheet, generated from the same table that dispatches keys. */
 	private showHelp(): void {
-		const lines = [
-			theme.bold(theme.fg("accent", "euler — modal transcript navigation")),
+		const terminalWidth = this.host.ui.terminal.columns;
+		const terminalHeight = this.host.ui.terminal.rows;
+		const sections = cheatsheetSections();
+		const columns = terminalWidth >= 96 && sections.length > 2 ? 2 : 1;
+		const keyPad = 11;
+		const renderSection = (section: (typeof sections)[number]): string[] => [
+			theme.bold(theme.fg("accent", section.title)),
+			...section.entries.map(
+				(entry) => `  ${theme.fg("warning", entry.keys.padEnd(keyPad))} ${theme.fg("muted", entry.desc)}`,
+			),
 			"",
-			`${theme.fg("warning", "mode")}      Esc normal · i insert · v char-visual · V line-visual`,
-			`${theme.fg("warning", "motion")}    h j k l · w b e · 0 ^ $ · gg G · { } · 3j · Ctrl-d/u`,
-			`${theme.fg("warning", "select")}    y yank (yy line) · " quote selection · q quote`,
-			`${theme.fg("warning", "threads")}   f fork thread here (same context) · F rewind-fork at prompt`,
-			`${theme.fg("warning", "sessions")}  <space>s sessions · <space>t tree · <space>f fork`,
-			`${theme.fg("warning", "search")}    / query · n next · N previous`,
-			"",
-			theme.fg("dim", "any key to close"),
 		];
+
+		const lines: string[] = [theme.bold(theme.fg("accent", "euler keys")), ""];
+		if (columns === 1) {
+			for (const section of sections) lines.push(...renderSection(section));
+		} else {
+			// Greedy balance by whole sections, so a large group like `move` never splits.
+			const columnsData: Array<typeof sections> = [[], []];
+			const heights = [0, 0];
+			for (const section of sections) {
+				const target = heights[0] <= heights[1] ? 0 : 1;
+				columnsData[target].push(section);
+				heights[target] += section.entries.length + 2;
+			}
+			const rendered = columnsData.map((column) => column.flatMap(renderSection));
+			const height = Math.max(...rendered.map((column) => column.length));
+			const gap = 4;
+			const colWidth = Math.floor((Math.min(terminalWidth - 6, 100) - gap) / 2);
+			for (let index = 0; index < height; index++) {
+				const left = rendered[0][index] ?? "";
+				const right = rendered[1][index] ?? "";
+				lines.push(`${left}${" ".repeat(Math.max(1, colWidth - visibleWidth(left)))}${right}`.trimEnd());
+			}
+		}
+
+		if (lines.length > terminalHeight - 4) lines.length = terminalHeight - 4;
+		lines.push("", theme.fg("dim", "any key to close"));
 		const box = new Box(1, 1, (text) => theme.bg("userMessageBg", text));
 		box.addChild(new Text(lines.join("\n"), 0, 0));
-		this.overlay = this.host.ui.showOverlay(box, { anchor: "center", width: "70%" });
+		// An opaque backdrop keeps transcript text from bleeding around the modal.
+		const backdrop: Component = {
+			render: (width: number) =>
+				Array.from({ length: terminalHeight }, () => theme.bg("userMessageBg", " ".repeat(width))),
+			invalidate: () => {},
+		};
+		this.backdrop = this.host.ui.showOverlay(backdrop, {
+			anchor: "center",
+			width: terminalWidth,
+			maxHeight: terminalHeight,
+			nonCapturing: true,
+		});
+		this.overlay = this.host.ui.showOverlay(box, {
+			anchor: "center",
+			width: terminalWidth,
+			maxHeight: terminalHeight,
+		});
 		const listener = (data: string) => {
-			if (matchesKey(data, "escape") || data.length > 0) {
+			if (data.length > 0) {
 				this.host.ui.removeInputListener(listener);
 				this.closeOverlay();
 				return { consume: true };

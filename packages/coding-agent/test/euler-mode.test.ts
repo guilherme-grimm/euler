@@ -21,6 +21,7 @@ interface Recorded {
 	copies: string[];
 	forks: string[];
 	rewinds: EulerPrompt[];
+	opened: string[];
 }
 
 function setup() {
@@ -29,7 +30,7 @@ function setup() {
 	const scroll = new ScrollView({ render: () => TRANSCRIPT, invalidate() {} }, { follow: "end", primary: true });
 	tui.setLayoutRoot(scroll);
 	tui.start();
-	const recorded: Recorded = { quotes: [], copies: [], forks: [], rewinds: [] };
+	const recorded: Recorded = { quotes: [], copies: [], forks: [], rewinds: [], opened: [] };
 	const state = { streaming: false };
 	const prompts: EulerPrompt[] = [
 		{ entryId: "e1", text: "refactor the auth module" },
@@ -53,8 +54,12 @@ function setup() {
 			recorded.copies.push(text);
 			return true;
 		},
-		openSessions: () => {},
-		openTree: () => {},
+		openSessions: () => {
+			recorded.opened.push("sessions");
+		},
+		openTree: () => {
+			recorded.opened.push("tree");
+		},
 		focusEditor: () => {},
 		blurEditor: () => {},
 		showStatus: () => {},
@@ -172,5 +177,119 @@ describe("EulerMode", () => {
 		terminal.sendInput("\x1b");
 		await settle(terminal);
 		assert.deepEqual(consumed, [true]);
+	});
+
+	it("jumps by WORD with W/B/E and inside the viewport with H/M/L", async () => {
+		const { terminal, tui } = setup();
+		await settle(terminal);
+		terminal.sendInput("\x1b");
+		terminal.sendInput("G");
+		terminal.sendInput("gg");
+		await settle(terminal);
+		assert.equal(tui.getKeyboardState()?.cursor.row, 0);
+
+		// WORD motions treat ">" and "refactor" as whole tokens.
+		const first = TRANSCRIPT[0];
+		const refactorEnd = first.indexOf("refactor") + "refactor".length - 1;
+		const theStart = first.indexOf("the");
+		terminal.sendInput("0");
+		terminal.sendInput("2E");
+		await settle(terminal);
+		assert.equal(tui.getKeyboardState()?.cursor.row, 0);
+		assert.equal(tui.getKeyboardState()?.cursor.col, refactorEnd);
+
+		terminal.sendInput("W");
+		await settle(terminal);
+		assert.equal(tui.getKeyboardState()?.cursor.col, theStart);
+		terminal.sendInput("B");
+		await settle(terminal);
+		assert.equal(tui.getKeyboardState()?.cursor.col, first.indexOf("refactor"));
+
+		terminal.sendInput("G");
+		await settle(terminal);
+		terminal.sendInput("H");
+		await settle(terminal);
+		const top = tui.getKeyboardState()?.cursor.row;
+		terminal.sendInput("L");
+		await settle(terminal);
+		const bottom = tui.getKeyboardState()?.cursor.row;
+		terminal.sendInput("M");
+		await settle(terminal);
+		const middle = tui.getKeyboardState()?.cursor.row;
+		assert.ok(top !== undefined && bottom !== undefined && middle !== undefined);
+		assert.ok(top >= 0 && bottom >= top && middle >= top && middle <= bottom);
+	});
+
+	it("pages with Ctrl-f/Ctrl-b and accepts N G", async () => {
+		const { terminal, tui } = setup();
+		await settle(terminal);
+		terminal.sendInput("\x1b");
+		terminal.sendInput("\x06"); // ctrl+f
+		await settle(terminal);
+		const paged = tui.getKeyboardState()?.cursor.row ?? 0;
+		assert.ok(paged > 0);
+		terminal.sendInput("\x02"); // ctrl+b
+		await settle(terminal);
+		assert.ok((tui.getKeyboardState()?.cursor.row ?? 0) <= paged);
+		terminal.sendInput("2G");
+		await settle(terminal);
+		assert.equal(tui.getKeyboardState()?.cursor.row, 1);
+	});
+
+	it("yanks the current line with Y", async () => {
+		const { terminal, recorded } = setup();
+		await settle(terminal);
+		terminal.sendInput("\x1b");
+		terminal.sendInput("G");
+		terminal.sendInput("Y");
+		await settle(terminal);
+		assert.equal(recorded.copies.length, 1);
+		assert.ok(recorded.copies[0].includes("Option B keeps the store inline."));
+	});
+
+	it("shows which-key continuations for a pending prefix", async () => {
+		const { terminal, mode } = setup();
+		await settle(terminal);
+		terminal.sendInput("\x1b");
+		terminal.sendInput(" ");
+		await settle(terminal);
+		const status = mode.statusData();
+		assert.equal(status.pending, "<space>");
+		assert.ok(status.hint?.includes("s previous conversations"));
+		assert.ok(status.hint?.includes("f fork thread"));
+	});
+
+	it("opens session pickers from the leader", async () => {
+		const { terminal, recorded } = setup();
+		await settle(terminal);
+		terminal.sendInput("\x1b");
+		terminal.sendInput(" s");
+		await settle(terminal);
+		assert.deepEqual(recorded.opened, ["sessions"]);
+	});
+
+	it("does not leave a binding that is in the keymap but not dispatched", async () => {
+		const { terminal, mode } = setup();
+		await settle(terminal);
+		terminal.sendInput("\x1b");
+		for (const key of ["j", "k", "h", "l", "w", "b", "e", "W", "B", "E", "0", "^", "$", "{", "}", "y"]) {
+			terminal.sendInput(key);
+			await settle(terminal);
+			assert.ok(!mode.statusData().message?.includes("unmapped"), `unmapped: ${key}`);
+		}
+	});
+
+	it("keeps transcript stripping lazy so long sessions stay responsive", async () => {
+		const { MotionDoc } = await import("../src/modes/euler/motions.ts");
+		const line = "\u001b[38;2;126;136;142m \u2502   const value = await buildContextEntries();\u001b[0m";
+		const lines = Array.from({ length: 20000 }, () => line);
+		const start = performance.now();
+		const doc = new MotionDoc(lines);
+		const constructionMs = performance.now() - start;
+		assert.ok(constructionMs < 2, `construction took ${constructionMs.toFixed(2)}ms`);
+		const read = performance.now();
+		assert.ok(doc.text(100).includes("buildContextEntries"));
+		assert.ok(doc.lastCol(100) > 0);
+		assert.ok(performance.now() - read < 5);
 	});
 });
