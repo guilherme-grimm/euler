@@ -16,14 +16,16 @@ import {
 	matchesKey,
 	type OverlayHandle,
 	type ScrollView,
-	Text,
 	type TUI,
 	type TuiAltScreen,
 	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import { theme } from "../interactive/theme/theme.ts";
+import { BRAND_MARK, brand } from "./euler-look.ts";
 import type { EulerModeName, EulerStatusData } from "./euler-status.ts";
+import type { UsageSnapshot, UsageWindow } from "./euler-usage.ts";
+import { compactTokens, until } from "./euler-voice.ts";
 import { EULER_STARTUP_HINT } from "./identity.ts";
 import {
 	canonicalKey,
@@ -62,6 +64,24 @@ export interface EulerPrompt {
 	text: string;
 }
 
+/** Live window report for `:context`. */
+export interface EulerContextReport {
+	model?: string;
+	tokens: number | null;
+	percent: number | null;
+	contextWindow: number;
+	enabled: boolean;
+	reserveTokens: number;
+	keepRecentTokens: number;
+	compactions: number;
+	contextEdits: number;
+	lastCompaction?: { tokensBefore: number };
+	messages: number;
+	turns: number;
+	cacheRead?: number;
+	freshInput?: number;
+}
+
 export interface EulerHost {
 	readonly ui: TUI;
 	readonly renderer: TuiAltScreen;
@@ -78,6 +98,8 @@ export interface EulerHost {
 	openTree(): void;
 	/** Show/hide the persistent thread rail on the left. */
 	toggleSidebar(): void;
+	/** Compact/comfortable rail rows (`:density`, `v` in the rail). */
+	toggleDensity(): void;
 	/** Open the rail if needed and focus it. */
 	showSidebar(): void;
 	/** Return focus to the transcript without closing the rail. */
@@ -99,6 +121,18 @@ export interface EulerHost {
 	hasForeignFocus(): boolean;
 	sessionName(): string;
 	parentName(): string | undefined;
+	/** Active model + thinking level for the statusline chip. */
+	modelInfo(): { name: string; thinking?: string } | undefined;
+	/** Open pi's model picker (`:model`). */
+	showModels(): void;
+	/** Compact quota segment for the statusline, for the active model's provider. */
+	usageSegment(): { label: string; percent: number } | undefined;
+	/** Subscription quota snapshot (windows + loading) for `:usage`. */
+	usage(): UsageSnapshot;
+	/** Force a usage refresh before `:usage` renders. */
+	refreshUsage(): void;
+	/** Live context window report for `:context`. */
+	contextReport(): EulerContextReport | undefined;
 }
 
 const SCROLL_OFF = 10;
@@ -108,6 +142,7 @@ const DOC_FREE_ACTIONS = new Set<EulerAction>([
 	"sessions",
 	"tree",
 	"sidebar",
+	"newSession",
 	"focusSidebar",
 	"focusTranscript",
 	"insert",
@@ -128,8 +163,9 @@ export class EulerMode {
 	private searchMatches: Cursor[] = [];
 	private searchIndex = -1;
 	private message = "";
+	/** When the current turn started, for the `working 12s` label; cleared when it settles. */
+	private streamingSince?: number;
 	private overlay?: OverlayHandle;
-	private backdrop?: OverlayHandle;
 	/** One-shot listener that closes an informational overlay; removed with the overlay. */
 	private overlayKeyListener?: (data: string) => { consume?: boolean } | undefined;
 	private detach?: () => void;
@@ -152,8 +188,6 @@ export class EulerMode {
 		this.host.renderer.setKeyboardState(undefined);
 		this.overlay?.hide();
 		this.overlay = undefined;
-		this.backdrop?.hide();
-		this.backdrop = undefined;
 		this.clearOverlayListener();
 	}
 
@@ -161,13 +195,19 @@ export class EulerMode {
 		const total = this.host.renderer.getViewportSnapshot(this.host.transcript)?.lines.length ?? 0;
 		const count = this.count > 0 ? String(this.count) : "";
 		const pending = this.pendingTokens.length > 0 ? displayKeys(this.pendingTokens.join(" ")) : "";
+		const streaming = this.host.isStreaming();
+		if (streaming) this.streamingSince ??= Date.now();
+		else this.streamingSince = undefined;
 		return {
 			mode: this.mode,
 			line: Math.min(this.cursor.row + 1, Math.max(1, total)),
 			total,
 			sessionName: this.host.sessionName(),
 			parent: this.host.parentName(),
-			streaming: this.host.isStreaming(),
+			model: this.host.modelInfo(),
+			usage: this.host.usageSegment(),
+			streaming,
+			workingMs: this.streamingSince === undefined ? undefined : Date.now() - this.streamingSince,
 			pending: `${pending}${count}` || undefined,
 			hint: this.pendingHint || undefined,
 			message: this.message || undefined,
@@ -429,6 +469,9 @@ export class EulerMode {
 			case "sidebar":
 				this.host.toggleSidebar();
 				return;
+			case "newSession":
+				this.host.newSession();
+				return;
 			case "focusSidebar":
 				this.host.showSidebar();
 				return;
@@ -673,7 +716,7 @@ export class EulerMode {
 
 	/** `:` command line, vim-style: `:q` quits, `:help` opens the cheatsheet. */
 	private openCommand(): void {
-		const input = new Input({ prompt: ":", placeholder: "q · help" });
+		const input = new Input({ prompt: ":", placeholder: "q · model · usage · context · help" });
 		const box = new Box(1, 0, (text) => theme.bg("selectedBg", text));
 		box.addChild(input);
 		input.onSubmit = (value) => {
@@ -710,6 +753,18 @@ export class EulerMode {
 			case "threads":
 			case "t":
 				this.host.toggleSidebar();
+				return;
+			case "density":
+				this.host.toggleDensity();
+				return;
+			case "model":
+				this.host.showModels();
+				return;
+			case "usage":
+				this.showUsage();
+				return;
+			case "context":
+				this.showContext();
 				return;
 			case "new":
 				this.host.newSession();
@@ -759,8 +814,6 @@ export class EulerMode {
 		this.clearOverlayListener();
 		this.overlay?.hide();
 		this.overlay = undefined;
-		this.backdrop?.hide();
-		this.backdrop = undefined;
 		this.mode = this.anchor ? "visual" : "normal";
 		if (this.mode === "normal") this.host.blurEditor();
 		this.syncCursor();
@@ -797,75 +850,206 @@ export class EulerMode {
 	/** `?`: a vim-style floating cheatsheet, generated from the keymap table. */
 	private showHelp(): void {
 		const terminalWidth = this.host.ui.terminal.columns;
-		const terminalHeight = this.host.ui.terminal.rows;
 		const sections = cheatsheetSections();
-		const columns = terminalWidth >= 96 && sections.length > 2 ? 2 : 1;
-		const keyPad = 11;
-		const renderSection = (section: (typeof sections)[number]): string[] => [
+		type Section = (typeof sections)[number];
+		const keyPad = Math.max(
+			6,
+			...sections.flatMap((section) => section.entries.map((entry) => visibleWidth(entry.keys))),
+		);
+		const renderSection = (section: Section, pad: number): string[] => [
 			theme.bold(theme.fg("accent", section.title)),
 			...section.entries.map(
-				(entry) => `  ${theme.fg("warning", entry.keys.padEnd(keyPad))} ${theme.fg("muted", entry.desc)}`,
+				(entry) => `  ${theme.fg("warning", entry.keys.padEnd(pad))} ${theme.fg("muted", entry.desc)}`,
 			),
 			"",
 		];
 
-		const content: string[] = [];
-		if (columns === 1) {
-			for (const section of sections) content.push(...renderSection(section));
-		} else {
-			const columnsData: Array<typeof sections> = [[], []];
+		// Two columns when the terminal allows it; each section lands in the shorter column.
+		const twoColumns = terminalWidth >= 84 && sections.length > 2;
+		const columnSections: Section[][] = twoColumns ? [[], []] : [sections];
+		if (twoColumns) {
 			const heights = [0, 0];
 			for (const section of sections) {
 				const target = heights[0] <= heights[1] ? 0 : 1;
-				columnsData[target].push(section);
-				heights[target] += section.entries.length + 2;
-			}
-			const rendered = columnsData.map((column) => column.flatMap(renderSection));
-			const height = Math.max(...rendered.map((column) => column.length));
-			const gap = 4;
-			const colWidth = Math.floor((Math.min(terminalWidth - 12, 100) - gap) / 2);
-			for (let index = 0; index < height; index++) {
-				const left = rendered[0][index] ?? "";
-				const right = rendered[1][index] ?? "";
-				content.push(`${left}${" ".repeat(Math.max(1, colWidth - visibleWidth(left)))}${right}`.trimEnd());
+				columnSections[target]?.push(section);
+				heights[target] = (heights[target] ?? 0) + section.entries.length + 2;
 			}
 		}
-
-		content.push("", theme.fg("dim", "rail: ◉ live · ● current · ◆ unread · · empty start"));
+		// Size each column to its own content: the popup should hug the keys, not the terminal.
+		const paddings = columnSections.map((column) =>
+			Math.max(4, ...column.flatMap((section) => section.entries.map((entry) => visibleWidth(entry.keys)))),
+		);
+		const sectionWidth = (section: Section, pad: number): number =>
+			Math.max(
+				visibleWidth(section.title),
+				...section.entries.map((entry) => 2 + pad + 1 + visibleWidth(entry.desc)),
+			);
+		const widths = columnSections.map((column, index) =>
+			Math.max(10, ...column.map((section) => sectionWidth(section, paddings[index] ?? 6))),
+		);
+		const gap = 4;
+		const contentWidth = widths.reduce((sum, width) => sum + width, 0) + gap * (widths.length - 1);
+		const rendered = columnSections.map((column, index) =>
+			column.flatMap((section) => renderSection(section, paddings[index] ?? keyPad)),
+		);
+		const height = Math.max(...rendered.map((column) => column.length));
+		const content: string[] = [];
+		for (let index = 0; index < height; index++) {
+			const cells = rendered.map((column, cell) => clampLine(column[index] ?? "", widths[cell] ?? 10));
+			content.push(cells.join(" ".repeat(gap)).trimEnd());
+		}
+		while (content.at(-1) === "") content.pop();
+		content.push("", theme.fg("dim", "rail: ⠹ working · ● current · ◆ unread · · empty · v density"));
 		content.push(theme.fg("dim", "press any key to close"));
 
-		// Vim float: rounded frame, title in the top border, body on its own background.
-		const width = Math.min(Math.max(40, terminalWidth - 6), 106);
-		const inner = width - 2;
-		const title = " euler keys ";
-		const topDash = Math.max(1, inner - visibleWidth(title) - 1);
-		const frame = (text: string) => theme.fg("borderAccent", text);
-		const paint = (text: string) => theme.bg("toolPendingBg", text);
+		this.showPopup("keys", () => content, Math.max(24, Math.min(contentWidth + 4, terminalWidth - 4)));
+	}
 
-		const rows = Math.min(content.length, Math.max(4, terminalHeight - 4));
-		const lines: string[] = [paint(frame(`╭─${title}${"─".repeat(topDash)}╮`))];
-		for (let index = 0; index < rows; index++) {
-			lines.push(paint(`${frame("│")} ${clampLine(content[index] ?? "", inner - 2)} ${frame("│")}`));
+	/** `:usage` — subscription quota windows in percent, refreshed on open. */
+	private showUsage(): void {
+		this.host.refreshUsage();
+		this.showPopup("usage", () => this.usageLines(), 64);
+	}
+
+	private usageLines(): string[] {
+		const { accounts, loading } = this.host.usage();
+		if (accounts.length === 0) {
+			return [
+				"",
+				theme.fg("muted", loading ? " reading usage…" : " no subscription usage to show"),
+				theme.fg("dim", " log in with Claude Pro/Max or ChatGPT · i then /login"),
+				"",
+			];
 		}
-		lines.push(paint(frame(`╰${"─".repeat(inner)}╯`)));
+		const windows = accounts.flatMap((account) => account.windows);
+		const labelWidth = Math.max(5, ...windows.map((window) => visibleWidth(window.label)));
+		const lines: string[] = [];
+		for (const account of accounts) {
+			const plan = account.plan
+				? ` ${theme.fg(
+						"dim",
+						account.plan.replace(/^[a-z]/, (c) => c.toUpperCase()),
+					)}`
+				: "";
+			lines.push(`${theme.bold(theme.fg("text", account.label))}${plan}`);
+			if (account.error) lines.push(`  ${theme.fg("warning", account.error)}`);
+			else if (account.note) lines.push(`  ${theme.fg("dim", account.note)}`);
+			for (const window of account.windows) lines.push(this.usageRow(window, labelWidth));
+			lines.push("");
+		}
+		while (lines.at(-1) === "") lines.pop();
+		lines.push(
+			"",
+			theme.fg("dim", loading ? " reading usage…" : " provider windows · cached 60s · :usage refreshes"),
+		);
+		return lines;
+	}
 
-		const box = new Box(0, 0, (text) => theme.bg("userMessageBg", text));
-		box.addChild(new Text(lines.join("\n"), 0, 0));
-		const backdrop: Component = {
-			render: (backdropWidth: number) =>
-				Array.from({ length: terminalHeight }, () => theme.bg("userMessageBg", " ".repeat(backdropWidth))),
+	private usageRow(window: UsageWindow, labelWidth: number): string {
+		const percent = Math.round(window.usedPercent);
+		const color = percent >= 80 ? "error" : percent >= 50 ? "warning" : "success";
+		const filled = Math.round((percent / 100) * 10);
+		const bar = theme.fg(color, `${"█".repeat(filled)}${"░".repeat(10 - filled)}`);
+		const reset = window.resetsAt ? `  ${theme.fg("dim", this.resetLabel(window.resetsAt))}` : "";
+		const value = theme.fg(color, `${String(percent).padStart(3)}%`);
+		return `  ${theme.fg("muted", window.label.padEnd(labelWidth))}  ${value}${reset}  ${bar}`;
+	}
+
+	private resetLabel(resetsAt: string): string {
+		const at = Date.parse(resetsAt);
+		if (!Number.isFinite(at)) return "";
+		const ms = at - Date.now();
+		return ms <= 0 ? "resets now" : `resets in ${until(ms)}`;
+	}
+
+	/** `:context` — live window state, compaction threshold and cache split. */
+	private showContext(): void {
+		this.showPopup("context", () => this.contextLines(), 64);
+	}
+
+	private contextLines(): string[] {
+		const report = this.host.contextReport();
+		if (!report) return ["", theme.fg("muted", " context unavailable · no active model window"), ""];
+		const row = (label: string, value: string) => `  ${theme.fg("muted", label.padEnd(10))} ${value}`;
+		const header = `${theme.bold(theme.fg("text", "Context"))}${report.model ? ` ${theme.fg("dim", report.model)}` : ""}`;
+		if (report.tokens === null) {
+			return [
+				header,
+				"",
+				row("window", theme.fg("muted", compactTokens(report.contextWindow))),
+				row("used", theme.fg("dim", "unknown until the next reply")),
+			];
+		}
+		const percent = report.percent ?? 0;
+		const color = percent >= 80 ? "error" : percent >= 50 ? "warning" : "success";
+		const filled = Math.round((percent / 100) * 20);
+		const bar = theme.fg(color, `${"█".repeat(filled)}${"░".repeat(20 - filled)}`);
+		const threshold = report.enabled
+			? theme.fg("text", compactTokens(report.contextWindow - report.reserveTokens))
+			: theme.fg("dim", "disabled");
+		const lines = [
+			header,
+			`  ${theme.fg("muted", `${compactTokens(report.tokens)} / ${compactTokens(report.contextWindow)}`)}  ${theme.fg(color, `${percent.toFixed(1)}%`)}`,
+			`  ${bar}`,
+			"",
+			row("threshold", threshold),
+			row(
+				"reserve",
+				theme.fg(
+					"dim",
+					`${compactTokens(report.reserveTokens)} · keeps ${compactTokens(report.keepRecentTokens)} after compaction`,
+				),
+			),
+		];
+		if (report.cacheRead !== undefined && report.freshInput !== undefined) {
+			const total = report.cacheRead + report.freshInput;
+			const rate = total > 0 ? (report.cacheRead / total) * 100 : 0;
+			lines.push(
+				row(
+					"cache",
+					theme.fg(
+						"dim",
+						`${compactTokens(report.cacheRead)} cached · ${compactTokens(report.freshInput)} fresh (${rate.toFixed(1)}%)`,
+					),
+				),
+			);
+		}
+		lines.push(row("session", theme.fg("dim", `${report.messages} msgs · ${report.turns} turns`)));
+		const parts: string[] = [
+			report.compactions === 0
+				? "none"
+				: `${report.compactions}${report.lastCompaction ? ` · last at ${compactTokens(report.lastCompaction.tokensBefore)}` : ""}`,
+		];
+		if (report.contextEdits > 0) parts.push(`${report.contextEdits} context edits`);
+		lines.push(row("compaction", theme.fg("dim", parts.join(" · "))));
+		return lines;
+	}
+
+	/**
+	 * Floating popup shared by `?`, `:usage` and `:context`: opaque, one-cell drop shadow, no backdrop
+	 * so the transcript stays visible around it. `content` is lazy, so a probe that lands while the
+	 * panel is open shows up on the next frame. Any key closes it.
+	 */
+	private showPopup(title: string, content: () => string[], width?: number): void {
+		const terminalWidth = this.host.ui.terminal.columns;
+		const terminalHeight = this.host.ui.terminal.rows;
+		const widest = Math.max(1, ...content().map((line) => visibleWidth(line)));
+		const panelWidth = Math.max(24, Math.min(width ?? widest + 4, terminalWidth - 4));
+		const titleText = ` ${brand(BRAND_MARK)} ${theme.bold(theme.fg("text", `euler ${title}`))} `;
+		const popup: Component = {
+			render: () => this.renderPopup(titleText, content(), panelWidth, terminalHeight),
 			invalidate: () => {},
 		};
-		this.backdrop = this.host.ui.showOverlay(backdrop, {
+		const box = new Box(0, 0);
+		box.addChild(popup);
+		this.overlay = this.host.ui.showOverlay(box, {
 			anchor: "center",
-			width: terminalWidth,
+			width: panelWidth + 1,
 			maxHeight: terminalHeight,
-			nonCapturing: true,
 		});
-		this.overlay = this.host.ui.showOverlay(box, { anchor: "center", width, maxHeight: terminalHeight });
 		const listener = (data: string) => {
-			// The release of the key that opened the cheatsheet arrives after showOverlay(); closing
-			// on it would make the panel flash for one frame.
+			// The release of the key that opened the panel arrives after showOverlay(); closing on it
+			// would make the panel flash for one frame.
 			if (isKeyRelease(data)) return undefined;
 			if (data.length > 0) {
 				this.host.ui.removeInputListener(listener);
@@ -875,6 +1059,22 @@ export class EulerMode {
 			return undefined;
 		};
 		this.host.ui.addInputListener(listener);
+	}
+
+	private renderPopup(title: string, content: string[], panelWidth: number, terminalHeight: number): string[] {
+		const textWidth = panelWidth - 4;
+		const frame = (text: string) => theme.fg("borderAccent", text);
+		const paint = (text: string) => theme.bg("toolPendingBg", text);
+		const topDash = Math.max(1, panelWidth - 2 - visibleWidth(title) - 1);
+		const rows = Math.min(content.length, Math.max(4, terminalHeight - 4));
+		const lines: string[] = [paint(frame(`╭─${title}${"─".repeat(topDash)}╮`))];
+		for (let index = 0; index < rows; index++) {
+			lines.push(paint(`${frame("│")} ${clampLine(content[index] ?? "", textWidth)} ${frame("│")}`));
+		}
+		lines.push(paint(frame(`╰${"─".repeat(panelWidth - 2)}╯`)));
+		const shadow = theme.bg("selectedBg", " ");
+		const shadowRow = theme.bg("selectedBg", " ".repeat(panelWidth));
+		return [...lines.map((line) => `${line}${shadow}`), ` ${shadowRow}`];
 	}
 }
 

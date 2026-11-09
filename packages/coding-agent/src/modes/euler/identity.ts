@@ -29,4 +29,4 @@ export function eulerVersionLabel(version: string): string {
 }
 
 /** First-run line in the statusline; cleared on the first keystroke. */
-export const EULER_STARTUP_HINT = `${EULER_APP_NAME} · vim-native · ? keys`;
+export const EULER_STARTUP_HINT = "esc for normal · ? for keys";

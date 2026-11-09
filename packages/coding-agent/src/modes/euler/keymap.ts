@@ -55,6 +55,7 @@ export type EulerAction =
 	| "sessions"
 	| "tree"
 	| "sidebar"
+	| "newSession"
 	| "command"
 	| "focusSidebar"
 	| "focusTranscript";
@@ -127,6 +128,7 @@ export const KEYMAP: readonly KeymapEntry[] = [
 
 	// leader
 	{ keys: "space e", modes: NORMAL, group: "session", desc: "toggle thread sidebar", action: "sidebar" },
+	{ keys: "space n", modes: NORMAL, group: "session", desc: "new thread", action: "newSession" },
 	{ keys: "ctrl+h", modes: NORMAL, group: "session", desc: "focus thread sidebar", action: "focusSidebar" },
 	{ keys: "ctrl+l", modes: NORMAL, group: "session", desc: "focus transcript", action: "focusTranscript" },
 	{ keys: "space s", modes: NORMAL, group: "session", desc: "previous conversations", action: "sessions" },

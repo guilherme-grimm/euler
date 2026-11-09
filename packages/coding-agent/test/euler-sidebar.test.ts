@@ -5,6 +5,7 @@ import {
 	EulerSidebar,
 	orderThreads,
 	relativeAge,
+	type SidebarDensity,
 	type SidebarSnapshot,
 	type SidebarThread,
 } from "../src/modes/euler/euler-sidebar.ts";
@@ -15,12 +16,14 @@ initTheme("dark");
 /** The rail sizes itself from the terminal width (readWidth 120 in the fixture). */
 const RAIL_WIDTH = Math.min(38, Math.max(26, Math.floor(120 * 0.28)));
 
-const OLD = new Date("2026-11-01T10:00:00Z");
-const MID = new Date("2026-11-06T10:00:00Z");
-const NEW = new Date("2026-11-07T10:00:00Z");
+// Relative dates: a fixed fixture would drift out of the rail's recent window as the calendar moves.
+const OLD = new Date(Date.now() - 2 * 86_400_000);
+const MID = new Date(Date.now() - 3 * 3_600_000);
+const NEW = new Date(Date.now() - 5 * 60_000);
 
-function setup() {
+function setup(density: SidebarDensity = "comfortable") {
 	const events: string[] = [];
+	const state = { density };
 	const snapshot: SidebarSnapshot = {
 		threads: [
 			{ path: "/s/parent.jsonl", title: "refactor auth", modified: MID, messageCount: 12 },
@@ -47,6 +50,11 @@ function setup() {
 		read: () => snapshot,
 		readHeight: () => 20,
 		readWidth: () => 120,
+		density: () => state.density,
+		onDensity: (next) => {
+			state.density = next;
+			events.push(`density:${next}`);
+		},
 		onOpen: (path) => events.push(`open:${path}`),
 		onNew: () => events.push("new"),
 		onHide: () => events.push("hide"),
@@ -55,7 +63,7 @@ function setup() {
 		requestRender: () => {},
 	});
 	sidebar.focused = true;
-	return { sidebar, snapshot, events };
+	return { sidebar, snapshot, events, state };
 }
 
 describe("euler sidebar", () => {
@@ -73,11 +81,15 @@ describe("euler sidebar", () => {
 		);
 	});
 
-	it("renders a header, markers and ages", () => {
+	it("renders a brand header, sections, markers and metadata", () => {
 		const { sidebar } = setup();
 		const plain = sidebar.render(30).map((line) => stripTerminalSequences(line));
-		assert.ok(plain.some((line) => line.includes("threads 4")));
-		assert.ok(plain.some((line) => line.startsWith("● refactor auth")));
+		assert.ok(plain[0]?.includes("euler"), "brand header");
+		assert.ok(
+			plain.some((line) => line.includes("IDLE")),
+			"section header",
+		);
+		assert.ok(plain.some((line) => line.includes("●") && line.includes("refactor auth")));
 		assert.ok(
 			plain.some((line) => line.includes("◆ old thread")),
 			"unread marker",
@@ -86,12 +98,33 @@ describe("euler sidebar", () => {
 			plain.some((line) => line.includes("· orphan fork")),
 			"empty marker",
 		);
-		assert.ok(plain.some((line) => line.startsWith("└ ○ ") && line.includes("compare option B")));
+		assert.ok(plain.some((line) => line.includes("└ ") && line.includes("compare option B")));
+		assert.ok(
+			plain.some((line) => line.includes("12 msgs")),
+			"metadata line",
+		);
+		assert.ok(
+			plain.some((line) => line.includes("↳ 4 msgs")),
+			"fork metadata",
+		);
 		assert.ok(
 			plain.some((line) => line.includes("j/k")),
 			"footer hint",
 		);
 		for (const line of plain) assert.ok(visibleWidth(line) <= RAIL_WIDTH, `line too wide: ${line}`);
+	});
+
+	it("toggles density with v and drops the metadata line", () => {
+		const { sidebar, events, state } = setup();
+		sidebar.selectCurrent();
+		assert.ok(sidebar.render(30).some((line) => stripTerminalSequences(line).includes("12 msgs")));
+		sidebar.handleInput("v");
+		assert.deepEqual(events, ["density:compact"]);
+		assert.equal(state.density, "compact");
+		const compact = sidebar.render(30).map((line) => stripTerminalSequences(line));
+		assert.ok(compact.some((line) => line.includes("refactor auth")));
+		assert.ok(!compact.some((line) => line.includes("12 msgs")), "compact rows have no metadata line");
+		assert.equal(compact.length, 20, "rail fills the viewport height");
 	});
 
 	it("navigates with j/k/gg/G and opens with enter", () => {
@@ -144,14 +177,16 @@ describe("euler sidebar", () => {
 		}
 	});
 
-	it("marks the live thread and never overflows the rail", () => {
+	it("marks the live thread with a spinner and never overflows the rail", () => {
 		const { sidebar, snapshot } = setup();
 		snapshot.live = true;
 		snapshot.currentPath = "/s/parent.jsonl";
 		const plain = sidebar.render(28).map((line) => stripTerminalSequences(line));
+		const live = plain.find((line) => line.includes("refactor auth"));
+		assert.ok(live && /[\u2800-\u28ff]/.test(live), "braille spinner on the live thread");
 		assert.ok(
-			plain.some((line) => line.includes("◉") && line.includes("refactor auth")),
-			"live glyph",
+			plain.some((line) => line.includes("WORKING")),
+			"working section",
 		);
 		for (const line of plain) assert.ok(visibleWidth(line) <= RAIL_WIDTH, `overflow: ${line}`);
 		assert.equal(plain.length, 20, "rail fills the viewport height");

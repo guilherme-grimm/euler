@@ -70,6 +70,9 @@ function setup() {
 		toggleSidebar: () => {
 			recorded.opened.push("sidebar");
 		},
+		toggleDensity: () => {
+			recorded.opened.push("density");
+		},
 		showSidebar: () => {
 			recorded.opened.push("showSidebar");
 		},
@@ -96,6 +99,30 @@ function setup() {
 		hasForeignFocus: () => focus.foreign,
 		sessionName: () => "test-session",
 		parentName: () => undefined,
+		modelInfo: () => ({ name: "Opus 4.5", thinking: "high" }),
+		showModels: () => {
+			recorded.opened.push("models");
+		},
+		usageSegment: () => ({ label: "5h", percent: 23 }),
+		usage: () => ({ accounts: [], loading: false }),
+		contextReport: () => ({
+			model: "DeepSeek V4.1 Flash",
+			tokens: 447_138,
+			percent: 44.7138,
+			contextWindow: 1_000_000,
+			enabled: true,
+			reserveTokens: 16_384,
+			keepRecentTokens: 20_000,
+			compactions: 0,
+			contextEdits: 3,
+			messages: 638,
+			turns: 292,
+			cacheRead: 446_592,
+			freshInput: 546,
+		}),
+		refreshUsage: () => {
+			recorded.opened.push("usage");
+		},
 	};
 	const mode = new EulerMode(host);
 	mode.attach();
@@ -325,6 +352,16 @@ describe("EulerMode", () => {
 		assert.ok(performance.now() - read < 5);
 	});
 
+	it("starts a new thread from the leader", async () => {
+		const { terminal, recorded } = setup();
+		await settle(terminal);
+		terminal.sendInput("\x1b");
+		terminal.sendInput("\x1b[32u"); // space
+		terminal.sendInput("\x1b[110u"); // n
+		await settle(terminal);
+		assert.deepEqual(recorded.opened, ["new"]);
+	});
+
 	it("decodes Kitty CSI-u printable keys (space, ?)", async () => {
 		const { terminal, tui, recorded, mode } = setup();
 		await settle(terminal);
@@ -383,6 +420,37 @@ describe("EulerMode", () => {
 		await settle(terminal);
 		assert.equal(mode.statusData().pending, undefined);
 		assert.equal(mode.statusData().message, undefined, `unexpected message: ${mode.statusData().message}`);
+	});
+
+	it("opens the usage panel from the command line", async () => {
+		const { terminal, tui, recorded } = setup();
+		await settle(terminal);
+		terminal.sendInput("\x1b");
+		terminal.sendInput(":");
+		await settle(terminal);
+		for (const char of "usage") terminal.sendInput(char);
+		terminal.sendInput("\r");
+		await settle(terminal);
+		assert.deepEqual(recorded.opened, ["usage"]);
+		assert.equal(tui.hasOverlayEntries, true);
+		terminal.sendInput("x");
+		await settle(terminal);
+		assert.equal(tui.hasOverlayEntries, false);
+	});
+
+	it("opens the context panel with the live numbers", async () => {
+		const { terminal, tui } = setup();
+		await settle(terminal);
+		terminal.sendInput("\x1b");
+		terminal.sendInput(":");
+		await settle(terminal);
+		for (const char of "context") terminal.sendInput(char);
+		terminal.sendInput("\r");
+		await settle(terminal);
+		const screen = terminal.getViewport().join("\n");
+		assert.ok(screen.includes("Context"), screen);
+		assert.ok(screen.includes("44.7%"), screen);
+		assert.equal(tui.hasOverlayEntries, true);
 	});
 
 	it("keeps the cheatsheet open when the opening key releases", async () => {
@@ -471,6 +539,8 @@ describe("EulerMode", () => {
 		for (const [command, expected] of [
 			["e", "editor"],
 			["threads", "sidebar"],
+			["density", "density"],
+			["model", "models"],
 			["new", "new"],
 		] as const) {
 			terminal.sendInput(":");

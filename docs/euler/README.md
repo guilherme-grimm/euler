@@ -9,8 +9,8 @@ vim-flavoured interaction layer over the fullscreen transcript. It is a drop-in 
 `~/.pi/agent` directory, same sessions, auth, models, skills, extensions, MCP and codemode. `pi`
 itself stays stock Pi — the layer runs through the `euler` binary or the explicit `--ui euler`.
 
-Status: **MVP**. Modal navigation, visual selection, persistent quotes and thread forking work.
-The input editor is still plain insert mode (see [Roadmap](#roadmap)).
+Status: **MVP+**. Modal navigation, quotes, thread forks, the rail, and the `:usage` / `:context`
+panels work. The input editor is still plain insert mode (see [Roadmap](#roadmap)).
 
 ## Identity
 
@@ -79,11 +79,12 @@ normal mode; `i` returns to insert.
 | both | `F` | **rewind-fork** before the prompt at/under the cursor |
 | both | `/` `n` `N` | search the transcript, next/previous match |
 | normal | `<space>e` | toggle the thread sidebar |
+| normal | `<space>n` | new thread |
 | normal | `Ctrl-h` / `Ctrl-l` | focus the sidebar / back to the transcript |
 | normal | `<space>s` | session picker (previous conversations) |
 | normal | `<space>t` | session tree navigator |
 | normal | `<space>f` | fork |
-| normal | `<space>h` or `?` | cheatsheet (vim-style float) |
+| normal | `<space>h` or `?` | cheatsheet (floating popup) |
 | normal | `i` / `a` | back to insert (editor) |
 | normal | `:` | command line (see below) |
 | normal | `Esc` | clear pending prefix/count, or abort a streaming turn |
@@ -97,14 +98,18 @@ first turn is written to disk.
 
 | glyph | meaning |
 |---|---|
-| `◉` | current session with a turn in flight |
+| `⠹` (braille spinner) | current session with a turn in flight |
 | `●` | current session (idle) |
 | `◆` | changed since you last opened it (recent only; never-opened threads are plain history) |
 | `·` | never used (no messages yet) |
 | `○` | read |
 
-The default view is the working set: threads touched in the **last week**; the header shows
-`· +N older` for the rest. `/` switches to search, which covers all history and filters as you
+Rows are grouped by liveness: a turn in flight puts its thread under `WORKING`, everything else under
+`IDLE`. `v` (or `:density`) switches between the default two-line rows — title, then `12 msgs · 2h` —
+and one dense line per thread; the choice is remembered in `~/.pi/agent/euler-ui.json`.
+
+The default view is the working set: threads touched in the **last week**; the `IDLE` header shows
+`+N older` for the rest. `/` switches to search, which covers all history and filters as you
 type (`↑`/`↓` move, `Enter` opens, `Esc` clears then leaves). Read state is persisted in
 `~/.pi/agent/euler-seen.json` (path → last opened). The rail is not polled: it refreshes on open,
 after forks, and after switching.
@@ -115,6 +120,7 @@ after forks, and after switching.
 | `/` | search all history (type to filter) |
 | `Enter` | open that thread (or hide the rail when it is already current) |
 | `n` / `r` | new session / reload the list |
+| `v` | comfortable ↔ compact rows |
 | `Ctrl-l` | back to the transcript, rail stays open (`Ctrl-h` returns) |
 | `e` `q` `Esc` | hide the rail |
 
@@ -122,9 +128,33 @@ The rail is refreshed when it opens, after forking, and after switching threads.
 fork also raise a transient flash (`Quoted into the thread`, `Forked thread`, …) so actions have
 feedback beyond the statusline text.
 
+The statusline reads left to right: a teal bar with the mode, the thread name, then only what is
+true — `⠹ working 12s`, `5h 61%`, `42/512`, `Opus 4.5 high`, `↳ parent`, a transient message. The
+model chip trims vendor prefixes and shows the thinking level only when the model reasons. When the
+line runs out of room the chip goes first, then the quota segment, so the thread and position
+survive. The braille spinner is the only animation in Euler; its 90 ms ticker starts with a turn and
+stops the moment it settles, so an idle screen costs nothing.
+
+`:usage` lists the subscription plan windows in percent — `5h` and `7d` for Claude, `primary` and
+`secondary` for Codex, `5h`/`7d`/`30d` for OpenCode Go — with reset countdowns and a bar that turns
+yellow at 50% and red at 80%. The active provider leads the list. Claude numbers come from the same
+OAuth endpoint Claude Code's `/usage` uses; Codex from `/backend-api/wham/usage` with the account id
+inside its token; OpenCode Go from `/zen/go/v1/usage` with the API key. All are read-only, cached for
+a minute and refreshed when the panel opens; a failed probe reads `unavailable` instead of guessing,
+and API keys (no subscription) say `api key · no plan windows`.
+
+If a row reads `auth failed`, the stored login could not be refreshed — run `euler auth login
+<provider>` (or `i`, then `/login`).
+
+`:context` shows the live window in the same popup: tokens against the model's window, the
+compaction threshold (`window - reserve`), how much survives a compaction, the last request's cache
+split, and the session's message/turn/compaction/context-edit counts. It reads the same numbers as
+the footer, but explains them.
+
 Prefixes show which-key hints in the statusline (`<space>` → `s previous conversations · t session
-tree · f fork thread · h this cheatsheet`), and `?` opens a grouped cheatsheet generated from the
-same table that dispatches keys — `packages/coding-agent/src/modes/euler/keymap.ts`.
+tree · f fork thread · n new thread · h this cheatsheet`), and `?` opens a floating cheatsheet — a
+content-sized popup with a drop shadow over the still-visible transcript, generated from the same
+table that dispatches keys (`packages/coding-agent/src/modes/euler/keymap.ts`).
 
 `Esc` in normal mode never types: it clears a pending operator or count, and otherwise does
 nothing unless a turn is streaming, in which case it reaches pi's abort handler.
@@ -143,8 +173,10 @@ editor is focused, so those panels keep their own keys (typing filters, arrows m
 ### Command line
 
 `:q` · `:q!` · `:quit` · `:wq` · `:x` quit · `:help` opens the cheatsheet · `:e` (or `:edit`) hands
-the prompt to `$VISUAL`/`$EDITOR` · `:threads` toggles the rail · `:new` starts a session ·
-`:fork` forks the current thread. Anything else reports `not a command: :foo`.
+the prompt to `$VISUAL`/`$EDITOR` · `:threads` toggles the rail · `:density` toggles rail rows ·
+`:model` opens pi's model picker · `:usage` lists plan windows in percent · `:context` shows the
+window and compaction threshold · `:new` starts a session · `:fork` forks the current thread.
+Anything else reports `not a command: :foo`.
 
 ## Model
 
@@ -176,10 +208,14 @@ Euler lives in new files, with small seams in upstream code:
 | Path | Role |
 |---|---|
 | `packages/coding-agent/src/modes/euler/keymap.ts` | key table: dispatch, which-key hints, cheatsheet |
-| `packages/coding-agent/src/modes/euler/euler-mode.ts` | modal state machine, actions, overlays |
+| `packages/coding-agent/src/modes/euler/euler-mode.ts` | modal state machine, actions, overlays, `:usage` / `:context` panels |
 | `packages/coding-agent/src/modes/euler/motions.ts` | pure, cell-aware motions with lazy row stripping |
-| `packages/coding-agent/src/modes/euler/euler-sidebar.ts` | thread rail (sessions + fork nesting) |
-| `packages/coding-agent/src/modes/euler/euler-status.ts` | one-line vim statusline |
+| `packages/coding-agent/src/modes/euler/euler-sidebar.ts` | thread rail: sections, fork nesting, search, density |
+| `packages/coding-agent/src/modes/euler/euler-status.ts` | brand statusline: mode, activity, quota, model |
+| `packages/coding-agent/src/modes/euler/euler-look.ts` | brand teal, braille spinner |
+| `packages/coding-agent/src/modes/euler/euler-voice.ts` | microcopy, durations, token/model formatting |
+| `packages/coding-agent/src/modes/euler/euler-usage.ts` | subscription windows (Claude, Codex, OpenCode Go) |
+| `tools/euler/dev.mjs` | source supervisor: quiescent restart-on-save |
 | `packages/tui/src/tui-alt-screen.ts` | `setKeyboardState`, `getViewportSnapshot` (seam) |
 | `packages/coding-agent/src/modes/interactive/interactive-mode.ts` | `attachEulerMode()` host wiring, rail layout (seam) |
 

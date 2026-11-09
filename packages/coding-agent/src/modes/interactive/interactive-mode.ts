@@ -137,15 +137,19 @@ import { loadAllHighlightLanguages } from "../../utils/syntax-highlight.ts";
 import { stripBom } from "../../utils/text.ts";
 import { ensureTool, type ToolStatus } from "../../utils/tools-manager.ts";
 import { checkForNewPiVersion, type LatestPiRelease } from "../../utils/version-check.ts";
-import { type EulerHost, EulerMode, type EulerPrompt } from "../euler/euler-mode.ts";
+import { BRAND_MARK, brand } from "../euler/euler-look.ts";
+import { type EulerContextReport, type EulerHost, EulerMode, type EulerPrompt } from "../euler/euler-mode.ts";
 import {
 	CURRENT_THREAD_KEY,
 	EulerSidebar,
 	RECENT_WINDOW_MS,
+	type SidebarDensity,
 	type SidebarSnapshot,
 	type SidebarThread,
 } from "../euler/euler-sidebar.ts";
 import { EulerStatusLine } from "../euler/euler-status.ts";
+import { EulerUsage, type UsageSnapshot } from "../euler/euler-usage.ts";
+import { shortModelName } from "../euler/euler-voice.ts";
 import { EULER_APP_NAME } from "../euler/identity.ts";
 import { reportBug } from "./bug-report.ts";
 import { createChatViewport } from "./chat-viewport.ts";
@@ -490,6 +494,11 @@ export class InteractiveMode {
 	private eulerSidebarRequest = 0;
 	private eulerSeen = new Map<string, number>();
 	private eulerSeenLoaded = false;
+	private eulerDensity: SidebarDensity = "comfortable";
+	private eulerPrefsLoaded = false;
+	private eulerUsage?: EulerUsage;
+	private devAgentBusy = false;
+	private devCompactionBusy = false;
 	private fullscreenLayoutRoot: Component | undefined;
 	private pendingMessagesContainer: Container;
 	private statusContainer: Container;
@@ -1066,6 +1075,7 @@ export class InteractiveMode {
 		// Start the UI before initializing extensions so session_start handlers can use interactive dialogs
 		this.ui.start();
 		this.isInitialized = true;
+		this.writeDevStatus(false);
 		this.programStatus.report();
 		this.ensurePngTranscoder();
 
@@ -1080,8 +1090,13 @@ export class InteractiveMode {
 			// Built on demand so the header follows theme changes. The logo's first line carries the version,
 			// its second line the first line of key hints. Terminals that cannot render the logo get a
 			// "Pi vX" line instead, with the key hints below it.
-			const showLogo = supportsPiLogo();
+			const showLogo = supportsPiLogo() && !this.eulerEnabled();
 			const withLogo = (hints: string) => {
+				if (this.eulerEnabled()) {
+					// Same wordmark as the rail, so the header and the pane agree on who this is.
+					const name = theme.bold(theme.fg("text", EULER_APP_NAME));
+					return `${brand(BRAND_MARK)} ${name} ${theme.fg("dim", `v${this.version}`)}\n${hints}`;
+				}
 				if (!showLogo) return `${piWordmark()} ${theme.fg("dim", `v${this.version}`)}\n${hints}`;
 				const [top, bottom] = piLogoLines();
 				return `${top} ${theme.fg("dim", `v${this.version}`)}\n${bottom} ${hints}`;
@@ -1090,8 +1105,29 @@ export class InteractiveMode {
 			// Build startup instructions using keybinding hint helpers
 			const hint = (keybinding: AppKeybinding, description: string) => keyHint(keybinding, description);
 
+			const eulerCompact = () =>
+				[
+					rawKeyHint("escape", "normal"),
+					rawKeyHint("?", "keys"),
+					rawKeyHint(":", "commands"),
+					rawKeyHint("space n", "new thread"),
+					rawKeyHint("space e", "threads"),
+					hint("app.tools.expand", "more"),
+				].join(theme.fg("muted", " · "));
+			// Normal-mode keys first; the insert-mode list below still applies inside the editor.
+			const eulerExpanded = () =>
+				[
+					theme.bold(theme.fg("accent", "normal mode")),
+					rawKeyHint("escape", "from the editor · ? full cheatsheet · : commands"),
+					rawKeyHint("space n", "new thread · space e threads · space s sessions"),
+					rawKeyHint("f", "fork thread · q quote selection · / search transcript"),
+					"",
+					theme.bold(theme.fg("accent", "editor")),
+				].join("\n");
+
 			const expandedInstructions = () =>
 				[
+					...(this.eulerEnabled() ? [eulerExpanded()] : []),
 					hint("app.interrupt", "to interrupt"),
 					hint("app.clear", "to clear"),
 					rawKeyHint(`${keyText("app.clear")} twice`, "to exit"),
@@ -1116,20 +1152,27 @@ export class InteractiveMode {
 					rawKeyHint("drop files", "to attach"),
 				].join("\n");
 			const compactInstructions = () =>
-				[
-					hint("app.interrupt", "interrupt"),
-					rawKeyHint(`${keyText("app.clear")}/${keyText("app.exit")}`, "clear/exit"),
-					rawKeyHint("/", "commands"),
-					rawKeyHint("!", "bash"),
-					hint("app.tools.expand", "more"),
-				].join(theme.fg("muted", " · "));
+				this.eulerEnabled()
+					? eulerCompact()
+					: [
+							hint("app.interrupt", "interrupt"),
+							rawKeyHint(`${keyText("app.clear")}/${keyText("app.exit")}`, "clear/exit"),
+							rawKeyHint("/", "commands"),
+							rawKeyHint("!", "bash"),
+							hint("app.tools.expand", "more"),
+						].join(theme.fg("muted", " · "));
 			const compactOnboarding = () =>
 				theme.fg(
 					"dim",
 					`Press ${keyText("app.tools.expand")} to show full startup help${showDetails ? " and loaded resources" : ""}.`,
 				);
 			const onboarding = () =>
-				theme.fg("dim", `Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.`);
+				theme.fg(
+					"dim",
+					this.eulerEnabled()
+						? "Euler explains itself: ? for keys, : for commands, or just ask."
+						: "Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.",
+				);
 			const header = new BuiltInHeader(
 				() => `${withLogo(compactInstructions())}\n${compactOnboarding()}\n\n${onboarding()}`,
 				() => `${withLogo(expandedInstructions())}\n\n${onboarding()}`,
@@ -3564,6 +3607,7 @@ export class InteractiveMode {
 
 		switch (event.type) {
 			case "agent_start":
+				this.setDevBusy("agent", true);
 				this.pendingTools.clear();
 				// Restore main escape handler if retry handler is still active
 				// (retry success event fires later, but we need main handler now)
@@ -3817,6 +3861,7 @@ export class InteractiveMode {
 				break;
 
 			case "agent_settled":
+				this.setDevBusy("agent", false);
 				// The session records deferred user bash results when the run settles; show them there too.
 				this.flushPendingBashComponents();
 				this.ui.requestRender();
@@ -3824,6 +3869,7 @@ export class InteractiveMode {
 				break;
 
 			case "compaction_start": {
+				this.setDevBusy("compaction", true);
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(true);
 				}
@@ -3844,6 +3890,7 @@ export class InteractiveMode {
 			}
 
 			case "compaction_end": {
+				this.setDevBusy("compaction", false);
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(false);
 				}
@@ -7288,18 +7335,24 @@ export class InteractiveMode {
 
 	private getEulerStatusLine(): EulerStatusLine {
 		if (!this.eulerStatusLine) {
-			this.eulerStatusLine = new EulerStatusLine(() => {
-				const mode = this.eulerMode;
-				if (mode) return mode.statusData();
-				return {
-					mode: "insert" as const,
-					line: 0,
-					total: 0,
-					sessionName: this.currentSessionLabel(),
-					parent: this.parentSessionLabel(),
-					streaming: this.session.isStreaming,
-				};
-			});
+			this.eulerStatusLine = new EulerStatusLine(
+				() => {
+					const mode = this.eulerMode;
+					if (mode) return mode.statusData();
+					return {
+						mode: "insert" as const,
+						line: 0,
+						total: 0,
+						sessionName: this.currentSessionLabel(),
+						parent: this.parentSessionLabel(),
+						model: this.eulerModelInfo(),
+						usage: this.eulerUsageSegment(),
+						streaming: this.session.isStreaming,
+					};
+				},
+				// The statusline owns the working spinner, so it needs a frame while a turn is in flight.
+				() => this.ui.requestRender(),
+			);
 		}
 		return this.eulerStatusLine;
 	}
@@ -7307,8 +7360,111 @@ export class InteractiveMode {
 	private currentSessionLabel(): string {
 		const name = this.sessionManager.getSessionName();
 		if (name) return name;
-		if (!this.sessionManager.getSessionFile()) return "new session";
-		return `session ${this.sessionManager.getSessionId().slice(0, 8)}`;
+		if (!this.sessionManager.getSessionFile()) return "new thread";
+		return `thread ${this.sessionManager.getSessionId().slice(0, 8)}`;
+	}
+
+	/** Statusline chip: vendor prefixes trimmed, thinking level only when the model actually reasons. */
+	private eulerModelInfo(): { name: string; thinking?: string } | undefined {
+		const model = this.session.model;
+		if (!model) return undefined;
+		const thinking = model.reasoning && this.session.thinkingLevel !== "off" ? this.session.thinkingLevel : undefined;
+		return { name: shortModelName(model.name, model.id), thinking };
+	}
+
+	/** One cached service for plan windows; refreshes on render when stale and on `:usage`. */
+	private ensureEulerUsage(): EulerUsage {
+		if (!this.eulerUsage) {
+			this.eulerUsage = new EulerUsage({
+				getAuth: async (provider) => (await this.session.modelRuntime.getAuth(provider))?.auth,
+			});
+			this.eulerUsage.onChange(() => this.ui.requestRender());
+		}
+		return this.eulerUsage;
+	}
+
+	/** Usage snapshot ordered with the active provider first, so the panel leads with what you use. */
+	private eulerUsageSnapshot(): UsageSnapshot {
+		const snapshot = this.ensureEulerUsage().read();
+		const active = this.session.model?.provider;
+		if (!active) return snapshot;
+		const rank = (provider: string) => (provider === active ? 0 : 1);
+		return { ...snapshot, accounts: [...snapshot.accounts].sort((a, b) => rank(a.provider) - rank(b.provider)) };
+	}
+
+	/** `EULER_DEV_STATUS` is the dev supervisor's interlock; absent outside `euler --dev`. */
+	private writeDevStatus(busy: boolean): void {
+		const target = process.env.EULER_DEV_STATUS;
+		if (!target) return;
+		try {
+			fs.writeFileSync(target, JSON.stringify({ busy, pid: process.pid, updatedAt: Date.now() }));
+		} catch {
+			// Best effort: a broken status file must not break the UI.
+		}
+	}
+
+	private setDevBusy(kind: "agent" | "compaction", busy: boolean): void {
+		if (kind === "agent") this.devAgentBusy = busy;
+		else this.devCompactionBusy = busy;
+		this.writeDevStatus(this.devAgentBusy || this.devCompactionBusy);
+	}
+
+	/** `:context`: the same numbers as the footer, in one place. */
+	private eulerContextReport(): EulerContextReport | undefined {
+		const usage = this.session.getContextUsage();
+		if (!usage) return undefined;
+		const settings = this.settingsManager.getCompactionSettings(this.session.model);
+		let compactions = 0;
+		let contextEdits = 0;
+		let messages = 0;
+		let turns = 0;
+		let lastCompaction: { tokensBefore: number } | undefined;
+		let lastUsage: { input: number; cacheRead: number; cacheWrite: number } | undefined;
+		for (const entry of this.sessionManager.getBranch()) {
+			if (entry.type === "message") {
+				messages += 1;
+				if (entry.message.role === "assistant") {
+					turns += 1;
+					if (entry.message.usage) lastUsage = entry.message.usage;
+				}
+			} else if (entry.type === "compaction") {
+				compactions += 1;
+				lastCompaction = { tokensBefore: entry.tokensBefore };
+			} else if (entry.type === "context_edit") {
+				contextEdits += 1;
+			}
+		}
+		return {
+			model: this.eulerModelInfo()?.name,
+			tokens: usage.tokens,
+			percent: usage.percent,
+			contextWindow: usage.contextWindow,
+			enabled: settings.enabled,
+			reserveTokens: settings.reserveTokens,
+			keepRecentTokens: settings.keepRecentTokens,
+			compactions,
+			contextEdits,
+			lastCompaction,
+			messages,
+			turns,
+			cacheRead: lastUsage?.cacheRead,
+			freshInput: lastUsage ? lastUsage.input + lastUsage.cacheWrite : undefined,
+		};
+	}
+
+	/** The most-consumed window for the active provider, e.g. `5h 61%`. */
+	private eulerUsageSegment(): { label: string; percent: number } | undefined {
+		if (!this.eulerEnabled()) return undefined;
+		const provider = this.session.model?.provider;
+		if (!provider) return undefined;
+		const usage = this.ensureEulerUsage();
+		void usage.refreshIfStale();
+		const account = usage.get(provider);
+		if (!account || account.windows.length === 0) return undefined;
+		const window = account.windows.reduce((best, candidate) =>
+			candidate.usedPercent > best.usedPercent ? candidate : best,
+		);
+		return { label: window.label, percent: Math.round(window.usedPercent) };
 	}
 
 	private parentSessionLabel(): string | undefined {
@@ -7343,6 +7499,7 @@ export class InteractiveMode {
 	 */
 	private ensureEulerSidebar(): EulerSidebar | undefined {
 		if (!this.eulerEnabled()) return undefined;
+		this.loadEulerPrefs();
 		this.eulerSidebar ??= new EulerSidebar({
 			read: () => ({
 				...this.eulerSidebarSnapshot,
@@ -7351,6 +7508,12 @@ export class InteractiveMode {
 			}),
 			readHeight: () => this.ui.terminal.rows,
 			readWidth: () => this.ui.terminal.columns,
+			density: () => this.eulerDensity,
+			onDensity: (density) => {
+				this.eulerDensity = density;
+				this.saveEulerPrefs();
+				this.ui.requestRender();
+			},
 			onOpen: (sessionPath) => this.openEulerThread(sessionPath),
 			onNew: () => {
 				this.closeEulerSidebar();
@@ -7389,6 +7552,13 @@ export class InteractiveMode {
 
 	private applyEulerLayout(): void {
 		this.ui.requestRender();
+	}
+
+	private toggleEulerDensity(): void {
+		this.eulerDensity = this.eulerDensity === "compact" ? "comfortable" : "compact";
+		this.saveEulerPrefs();
+		this.ui.requestRender();
+		if (this.renderer instanceof TuiAltScreen) this.renderer.flash(`rail: ${this.eulerDensity}`);
 	}
 
 	private toggleEulerSidebar(): void {
@@ -7440,6 +7610,31 @@ export class InteractiveMode {
 
 	private eulerSeenFile(): string {
 		return path.join(getAgentDir(), "euler-seen.json");
+	}
+
+	/** UI prefs (currently just rail density) live next to the seen map, best effort. */
+	private loadEulerPrefs(): void {
+		if (this.eulerPrefsLoaded) return;
+		this.eulerPrefsLoaded = true;
+		try {
+			const raw = JSON.parse(fs.readFileSync(path.join(getAgentDir(), "euler-ui.json"), "utf8")) as {
+				density?: string;
+			};
+			if (raw.density === "compact" || raw.density === "comfortable") this.eulerDensity = raw.density;
+		} catch {
+			// First run or unreadable file: the default density is good enough.
+		}
+	}
+
+	private saveEulerPrefs(): void {
+		try {
+			fs.writeFileSync(
+				path.join(getAgentDir(), "euler-ui.json"),
+				`${JSON.stringify({ density: this.eulerDensity }, null, "\t")}\n`,
+			);
+		} catch {
+			// Best effort: a read-only agent dir must not break the rail.
+		}
 	}
 
 	private loadEulerSeen(): void {
@@ -7635,7 +7830,16 @@ export class InteractiveMode {
 			},
 			sessionName: () => this.currentSessionLabel(),
 			parentName: () => this.parentSessionLabel(),
+			modelInfo: () => this.eulerModelInfo(),
+			showModels: () => this.showModelSelector(),
+			usageSegment: () => this.eulerUsageSegment(),
+			usage: () => this.eulerUsageSnapshot(),
+			contextReport: () => this.eulerContextReport(),
+			refreshUsage: () => {
+				void this.ensureEulerUsage().refresh();
+			},
 			toggleSidebar: () => this.toggleEulerSidebar(),
+			toggleDensity: () => this.toggleEulerDensity(),
 			showSidebar: () => this.showEulerSidebar(),
 			leaveSidebar: () => this.leaveEulerSidebar(),
 			flash: (message) => {

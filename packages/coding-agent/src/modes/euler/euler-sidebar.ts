@@ -9,8 +9,10 @@
  * opens, after a session change, and on `r`.
  */
 
-import { type Component, type Focusable, sliceByColumn, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { theme } from "../interactive/theme/theme.ts";
+import { type Component, type Focusable, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { type ThemeColor, theme } from "../interactive/theme/theme.ts";
+import { BRAND_MARK, brand, spinnerFrame } from "./euler-look.ts";
+import { threadMeta } from "./euler-voice.ts";
 
 export interface SidebarThread {
 	path: string;
@@ -36,6 +38,9 @@ export interface SidebarSnapshot {
 	live?: boolean;
 }
 
+/** Two-line rows with metadata, or one dense line per thread. */
+export type SidebarDensity = "comfortable" | "compact";
+
 export interface SidebarOptions {
 	/** Snapshot of the threads to render; the host owns loading and caching. */
 	read: () => SidebarSnapshot;
@@ -43,6 +48,9 @@ export interface SidebarOptions {
 	readHeight: () => number;
 	/** Terminal width, used to size the rail itself (`basis: "auto"` in the layout). */
 	readWidth: () => number;
+	/** Two-line rows with metadata, or one dense line per thread. */
+	density: () => SidebarDensity;
+	onDensity: (density: SidebarDensity) => void;
 	onOpen: (path: string) => void;
 	onNew: () => void;
 	onHide: () => void;
@@ -253,6 +261,9 @@ export class EulerSidebar implements Component, Focusable {
 			case "r":
 				this.options.onRefresh();
 				return;
+			case "v":
+				this.options.onDensity(this.options.density() === "compact" ? "comfortable" : "compact");
+				return;
 			case "\x0c":
 				this.options.onBlur();
 				return;
@@ -271,66 +282,160 @@ export class EulerSidebar implements Component, Focusable {
 		const snapshot = this.options.read();
 		const all = this.ordered(snapshot);
 		const rows = this.visible(all);
+		const density = this.options.density();
+		const now = Date.now();
 		// The rail owns its width so the layout can use `basis: "auto"` and follow resizes.
 		const width = Math.min(38, Math.max(26, Math.floor(this.options.readWidth() * 0.28)));
 		const inner = Math.max(10, width - 1);
 		const totalHeight = Math.max(6, this.options.readHeight());
+		const available = Math.max(3, totalHeight - CHROME_ROWS);
 		const border = theme.fg("dim", "│");
-		const ruleColor = this.focused ? "borderAccent" : "borderMuted";
-		const lines: string[] = [];
 
-		// Header + rule: the rail's "winbar", brighter while it owns focus.
-		const hidden = all.length - rows.length;
-		const header = this.searchActive()
-			? ` /${this.query}`
-			: ` threads ${rows.length}${hidden > 0 ? ` · +${hidden} older` : ""} `;
-		lines.push(clampLine(theme.bold(theme.fg(ruleColor as never, header.padEnd(inner))), inner));
-		lines.push(clampLine(theme.fg(ruleColor as never, "─".repeat(inner)), inner));
+		// One display list: section headers and rows share the window, so it scrolls like text. Items are
+		// whole — a two-line row is never cut in half by the viewport.
+		interface RailItem {
+			height: number;
+			offset: number;
+			row?: number;
+			lines: string[];
+		}
+		const items: RailItem[] = [];
+		const section = (
+			title: string,
+			live: boolean,
+			note: string | undefined,
+			entries: Array<{ row: SidebarRow; index: number }>,
+		): void => {
+			const count = String(entries.length);
+			const label = live ? theme.bold(brand(title.toUpperCase())) : theme.bold(theme.fg("dim", title.toUpperCase()));
+			const total = live ? brand(count) : theme.fg("dim", count);
+			const tail = note ? `${theme.fg("dim", note)} ${total}` : total;
+			const lead = ` ${label}`;
+			const gap = Math.max(1, inner - visibleWidth(lead) - visibleWidth(tail));
+			items.push({ height: 1, offset: 0, lines: [clampLine(`${lead}${" ".repeat(gap)}${tail}`, inner)] });
+			for (const entry of entries) {
+				const lines = this.renderRow(entry.row, entry.index, { inner, density, now, live });
+				items.push({ height: lines.length, offset: 0, row: entry.index, lines });
+			}
+		};
 
+		const older = all.length > rows.length ? `+${all.length - rows.length} older` : undefined;
 		if (rows.length === 0) {
-			const message = snapshot.loading
-				? " loading…"
-				: this.searchActive()
-					? " no match"
-					: " nothing this week · / searches all";
-			lines.push(clampLine(theme.fg("muted", message), inner));
+			items.push({ height: 1, offset: 0, lines: [clampLine(this.emptyState(snapshot), inner)] });
+		} else if (this.searchActive()) {
+			section(
+				this.query.length > 0 ? "matches" : "all threads",
+				false,
+				undefined,
+				rows.map((row, index) => ({ row, index })),
+			);
 		} else {
-			const viewHeight = Math.max(3, totalHeight - CHROME_ROWS);
-			if (this.selected < this.scrollTop) this.scrollTop = this.selected;
-			if (this.selected >= this.scrollTop + viewHeight) this.scrollTop = this.selected - viewHeight + 1;
-			const end = Math.min(rows.length, this.scrollTop + viewHeight);
-
-			for (let index = this.scrollTop; index < end; index++) {
-				const row = rows[index] as SidebarRow;
-				const live = row.current && snapshot.live;
-				const marker = live ? "◉" : row.current ? "●" : row.unread ? "◆" : row.messageCount === 0 ? "·" : "○";
-				const glyphColor = live ? "success" : row.current || row.unread ? "accent" : "muted";
-				const connector = row.depth > 0 ? "└ " : "";
-				const indent = " ".repeat(Math.max(0, row.depth - 1) * INDENT);
-				const age = relativeAge(row.modified).padStart(AGE_WIDTH);
-				const prefixWidth = visibleWidth(connector) + visibleWidth(marker) + 1 + visibleWidth(indent);
-				const titleWidth = Math.max(4, inner - prefixWidth - AGE_WIDTH - 1);
-				const title = sliceByColumn(oneLine(row.title), 0, titleWidth, true);
-				const gap = " ".repeat(Math.max(1, inner - prefixWidth - visibleWidth(title) - AGE_WIDTH));
-				const titleColor = row.current || row.unread ? "text" : "muted";
-				const body = `${connector}${theme.fg(glyphColor as never, marker)} ${indent}${theme.fg(titleColor, title)}${gap}${theme.fg("dim", age)}`;
-				const fitted = clampLine(body, inner);
-				const selected = this.focused && index === this.selected;
-				lines.push(selected ? theme.bg("selectedBg", fitted) : fitted);
-			}
-
-			if (rows.length > viewHeight) {
-				lines.push(clampLine(theme.fg("dim", ` ${this.selected + 1}/${rows.length}`), inner));
-			}
+			const entries = rows.map((row, index) => ({ row, index }));
+			const working = entries.filter((entry) => entry.row.current && snapshot.live);
+			const idle = entries.filter((entry) => !working.includes(entry));
+			if (working.length > 0) section("working", true, idle.length === 0 ? older : undefined, working);
+			if (idle.length > 0) section("idle", false, older, idle);
 		}
 
-		while (lines.length < totalHeight - 1) lines.push(" ".repeat(inner));
+		let offset = 0;
+		for (const item of items) {
+			item.offset = offset;
+			offset += item.height;
+		}
+		// Keep the selected thread in the window, then snap to an item boundary so nothing renders half.
+		const selected = items.find((item) => item.row === this.selected);
+		if (selected) {
+			const bottom = selected.offset + selected.height;
+			if (selected.offset < this.scrollTop) this.scrollTop = selected.offset;
+			else if (bottom > this.scrollTop + available) this.scrollTop = bottom - available;
+		}
+		this.scrollTop = Math.max(0, Math.min(this.scrollTop, Math.max(0, offset - available)));
+		const start = items.findIndex((item) => item.offset + item.height > this.scrollTop);
+		if (start >= 0 && items[start]) this.scrollTop = items[start].offset;
+
+		const body: string[] = [];
+		for (let index = Math.max(0, start); index < items.length; index++) {
+			const item = items[index];
+			if (!item || body.length + item.height > available) break;
+			body.push(...item.lines);
+		}
+		while (body.length < available) body.push(" ".repeat(inner));
+
+		const searching = this.searchActive();
+		const lead = ` ${brand(BRAND_MARK)} ${theme.bold(theme.fg("text", "euler"))}`;
+		const trail = searching
+			? theme.fg("dim", `/${this.query}`)
+			: snapshot.loading || snapshot.live
+				? brand(spinnerFrame(now))
+				: "";
+		const headerGap = Math.max(1, inner - visibleWidth(lead) - visibleWidth(trail));
 		// Longest hint that still fits, so narrow rails stay readable instead of showing "e hi…".
-		const hints = this.searchActive()
-			? [" type to filter · ↑↓ move · ⏎ open · esc clear", " filter · ↑↓ · ⏎ · esc", " /"]
-			: [" j/k move · / search · ⏎ open · n new · e hide", " j/k · / search · ⏎ open · e hide", " j/k · / · ⏎ · e"];
+		const hints = searching
+			? [" type to filter · ↑↓ move · ⏎ open", " filter · ↑↓ · ⏎ · esc", " /"]
+			: [" j/k · / search · v view · ⏎ open", " j/k · / · v view · ⏎", " j/k · / · v · ⏎"];
 		const hint = hints.find((candidate) => visibleWidth(candidate) <= inner) ?? hints.at(-1) ?? "";
-		lines.push(clampLine(theme.fg("dim", hint), inner));
-		return lines.map((line) => `${line}${border}`);
+		return [
+			`${clampLine(`${lead}${" ".repeat(headerGap)}${trail}`, inner)}${border}`,
+			`${theme.fg("borderMuted", "─".repeat(inner))}${border}`,
+			...body.map((line) => `${line}${border}`),
+			`${clampLine(theme.fg("dim", hint), inner)}${border}`,
+		];
+	}
+
+	/** One thread: a title line plus metadata (comfortable), or a single dense line (compact). */
+	private renderRow(
+		row: SidebarRow,
+		index: number,
+		options: { inner: number; density: SidebarDensity; now: number; live: boolean | undefined },
+	): string[] {
+		const { inner, density, now } = options;
+		const live = row.current && options.live === true;
+		const marker = live
+			? spinnerFrame(now)
+			: row.current
+				? "●"
+				: row.unread
+					? "◆"
+					: row.messageCount === 0
+						? "·"
+						: "○";
+		const markerColor: ThemeColor =
+			live || row.current ? "text" : row.unread ? "accent" : row.messageCount === 0 ? "dim" : "muted";
+		const paintedMarker = live || row.current ? brand(marker) : theme.fg(markerColor, marker);
+		const gutter = row.current ? brand("▎") : " ";
+		const branch = row.depth > 0 ? `${" ".repeat(Math.max(0, row.depth - 1) * INDENT)}${theme.fg("dim", "└ ")}` : "";
+		const lead = `${gutter}${paintedMarker} ${branch}`;
+		const title = oneLine(row.title);
+		const titleColor: ThemeColor = row.current || row.unread ? "text" : "muted";
+		const selected = this.focused && index === this.selected;
+		const paint = (text: string): string => {
+			const fitted = clampLine(text, inner);
+			return selected ? theme.bg("selectedBg", fitted) : fitted;
+		};
+
+		if (density === "compact") {
+			const age = relativeAge(row.modified, now).padStart(AGE_WIDTH);
+			const titleWidth = Math.max(4, inner - visibleWidth(lead) - AGE_WIDTH - 1);
+			const painted = `${lead}${theme.fg(titleColor, truncateToWidth(title, titleWidth, "…"))}`;
+			const gap = Math.max(1, inner - visibleWidth(painted) - AGE_WIDTH);
+			return [paint(`${painted}${" ".repeat(gap)}${theme.fg("dim", age)}`)];
+		}
+
+		const meta = threadMeta(row.messageCount, row.depth > 0, relativeAge(row.modified, now));
+		const indent = " ".repeat(visibleWidth(lead));
+		const titleWidth = Math.max(4, inner - visibleWidth(lead) - 1);
+		return [
+			paint(`${lead}${theme.fg(titleColor, truncateToWidth(title, titleWidth, "…"))}`),
+			paint(`${indent}${theme.fg("dim", truncateToWidth(meta, Math.max(4, inner - visibleWidth(indent)), "…"))}`),
+		];
+	}
+
+	/** Empty states get a sentence, not a shrug. */
+	private emptyState(snapshot: SidebarSnapshot): string {
+		if (snapshot.loading) return ` ${spinnerFrame()} loading threads…`;
+		if (this.searchActive()) {
+			return this.query.length > 0 ? ` no match: ${this.query}` : " no threads yet · n starts one";
+		}
+		return " nothing this week · / searches all";
 	}
 }
