@@ -12,6 +12,13 @@ if command -v readlink >/dev/null 2>&1; then
 	fi
 fi
 root=$(CDPATH= cd -- "$(dirname -- "$self")/.." && pwd)
+
+# `euler --dev` runs the source supervisor: restart on save, resume the session. No build needed.
+if [ "${1:-}" = "--dev" ]; then
+	shift
+	exec node "$root/tools/euler/dev.mjs" "$@"
+fi
+
 cli="$root/packages/coding-agent/dist/bundle/cli.js"
 
 if [ ! -f "$cli" ]; then

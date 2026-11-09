@@ -9,6 +9,7 @@ Verified: boot in the repo (title `euler - euler`), `:q` exits cleanly, `--conti
 
 ```bash
 cd ~/projects/euler
+euler --dev                      # launcher shortcut, same supervisor
 npm run dev                      # supervisor: source mode, reload on save
 ```
 
@@ -17,8 +18,14 @@ The supervisor runs euler straight from TypeScript — no build — and watches
 same session in about a second. `:q` stops both.
 
 What "reload" means: **the process restarts**. The session lives on disk, so the conversation
-survives; a turn that is streaming is aborted; the editor buffer and any pending input are lost.
-That is the trade for not maintaining a module-reload boundary in the app.
+survives; the editor buffer and any pending input are lost.
+
+Reloads are **quiescent**: the app writes `{ busy }` to `/tmp/euler-dev-status.json` on turn and
+compaction transitions, and the supervisor waits for the current turn to settle (plus a short grace)
+before restarting. That matters when the agent itself edits `src/` — a naive watcher would kill the
+turn doing the edit. If no status writer exists (an older app, or after a crash), automatic reloads
+stay off and `touch /tmp/euler-reload` forces one. Override the paths with `EULER_DEV_STATUS` and
+`EULER_DEV_RELOAD`.
 
 ```bash
 npm run dev                                  # resume the most recent session for this directory

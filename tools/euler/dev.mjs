@@ -13,8 +13,9 @@
  */
 
 import { spawn } from "node:child_process";
-import { watch } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { readFileSync, statSync, watch } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -26,6 +27,11 @@ const watchedRoots = ["packages/coding-agent/src", "packages/tui/src"].map((path
 const IGNORED = /(^|[/\\])(dist|node_modules|\.git)([/\\]|$)|\.test\.ts$/;
 const DEBOUNCE_MS = 250;
 const CRASH_WINDOW_MS = 2_500;
+const IDLE_GRACE_MS = 1_200;
+/** The app writes {busy} here on turn transitions; without it, reloads are manual. */
+const statusPath = resolve(process.env.EULER_DEV_STATUS ?? join(tmpdir(), "euler-dev-status.json"));
+/** Touch this to force a reload, or to bootstrap while no status writer exists. */
+const manualPath = resolve(process.env.EULER_DEV_RELOAD ?? join(tmpdir(), "euler-reload"));
 
 const forwarded = process.argv.slice(2);
 const pinnedSession = process.env.EULER_DEV_SESSION;
@@ -41,6 +47,8 @@ let restarting = false;
 let pendingRestart = false;
 let startedAt = 0;
 let shuttingDown = false;
+let waiting = false;
+let waitTimer;
 
 function argsForRun() {
 	const args = ["--import", resolverUrl, cliPath, "--ui", "euler"];
@@ -54,7 +62,7 @@ function start() {
 	child = spawn(process.execPath, argsForRun(), {
 		cwd: process.cwd(),
 		stdio: "inherit",
-		env: { ...process.env, EULER_DEV: "1" },
+		env: { ...process.env, EULER_DEV: "1", EULER_DEV_STATUS: statusPath },
 	});
 	child.on("exit", (code, signal) => {
 		const lived = Date.now() - startedAt;
@@ -104,6 +112,53 @@ function restart(reason) {
 }
 
 let debounce;
+
+/** undefined = no writer (manual mode); {busy} otherwise. */
+function readStatus() {
+	try {
+		const parsed = JSON.parse(readFileSync(statusPath, "utf8"));
+		return { busy: parsed?.busy === true };
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Reload only when the app is not mid-turn. The agent edits these files too, and restarting it
+ * while it streams kills the very turn doing the edit — so the status writer is the interlock.
+ */
+function maybeRestart(reason) {
+	if (shuttingDown) return;
+	if (!child) {
+		restart(reason);
+		return;
+	}
+	const status = readStatus();
+	if (!status) {
+		log(`no status writer yet; touch ${manualPath} to reload`);
+		return;
+	}
+	if (status.busy) {
+		if (!waiting) {
+			waiting = true;
+			log("turn in flight; reload queued");
+		}
+		clearTimeout(waitTimer);
+		waitTimer = setTimeout(() => maybeRestart(reason), 500);
+		waitTimer.unref?.();
+		return;
+	}
+	if (waiting) {
+		// Settled, but give the user a beat to submit the next prompt before pulling the rug.
+		waiting = false;
+		clearTimeout(waitTimer);
+		waitTimer = setTimeout(() => maybeRestart(reason), IDLE_GRACE_MS);
+		waitTimer.unref?.();
+		return;
+	}
+	restart(reason);
+}
+
 function onChange(filename) {
 	if (typeof filename === "string" && IGNORED.test(filename)) return;
 	clearTimeout(debounce);
@@ -112,7 +167,7 @@ function onChange(filename) {
 			pendingRestart = true;
 			return;
 		}
-		restart(filename ? `${filename} changed` : "change detected");
+		maybeRestart(filename ? `${filename} changed` : "change detected");
 	}, DEBOUNCE_MS);
 }
 
@@ -124,6 +179,30 @@ for (const root of watchedRoots) {
 	}
 }
 
+// Manual escape hatch: touch the sentinel to reload, or to bootstrap before the app writes status.
+let lastManual = 0;
+try {
+	lastManual = statSync(manualPath).mtimeMs;
+} catch {
+	// No sentinel yet; the first touch starts the clock.
+}
+setInterval(() => {
+	let mtime = 0;
+	try {
+		mtime = statSync(manualPath).mtimeMs;
+	} catch {
+		return;
+	}
+	if (mtime <= lastManual) return;
+	lastManual = mtime;
+	if (restarting) {
+		pendingRestart = true;
+		return;
+	}
+	// Explicit reload: bypass the status interlock; the user asked for it.
+	restart("manual reload");
+}, 1_000).unref();
+
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
 	process.on(signal, () => {
 		shuttingDown = true;
@@ -133,4 +212,5 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
 }
 
 log(`watching packages/{coding-agent,tui}/src · ${pinnedSession ? `session ${pinnedSession}` : "session: continue"}`);
+log(`reloads wait for the current turn · manual reload: touch ${manualPath}`);
 start();
