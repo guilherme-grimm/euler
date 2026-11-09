@@ -684,6 +684,8 @@ export async function main(args: string[], options?: MainOptions) {
 	const parsed = parseArgs(args);
 	parsed.ui ??= options?.ui;
 	if (parsed.ui === "euler") {
+		// Extensions can opt out of Pi-only behavior (task modes, teaching gates) without forking Pi.
+		process.env.EULER_ADE = "1";
 		// Euler's cursor and selection model lives in the alternate screen; there is no sensible
 		// regular-mode fallback, so the mode is forced instead of silently degrading.
 		parsed.tuiMode = "fullscreen";
