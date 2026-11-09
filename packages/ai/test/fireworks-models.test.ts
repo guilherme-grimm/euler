@@ -160,7 +160,10 @@ describe("Fireworks models", () => {
 	});
 
 	it("keeps toggle-only Messages models without a verified fallback on budget-based thinking", async () => {
-		const model = getModel("fireworks", "accounts/fireworks/models/nemotron-3-ultra-nvfp4");
+		// The catalog no longer has a toggle-only Fireworks model; keep the regression by removing the
+		// adaptive-thinking flag from a current one instead of depending on live model data.
+		const base = getModel("fireworks", "accounts/fireworks/models/qwen3p8-max");
+		const model = { ...base, compat: { ...base.compat, forceAdaptiveThinking: undefined } };
 		expect(model.compat?.forceAdaptiveThinking).toBeUndefined();
 		let payload: Record<string, unknown> | undefined;
 		await streamSimple(
@@ -187,7 +190,7 @@ describe("Fireworks models", () => {
 	});
 
 	it("sets Fireworks-specific compat for session affinity and unsupported tool fields", () => {
-		const model = getModel("fireworks", "accounts/fireworks/models/nemotron-3-ultra-nvfp4");
+		const model = getModel("fireworks", "accounts/fireworks/models/qwen3p8-max");
 
 		expect(model.compat).toBeDefined();
 		expect(model.compat?.sendSessionAffinityHeaders).toBe(true);

@@ -80,6 +80,7 @@ import {
 import { formatCacheWarmingStatus, formatCacheWarmingUsage } from "../../core/cache-warmer.ts";
 import { findExtensionStackMatches, recordCrash, takeUnnotifiedCrash } from "../../core/crash-log.ts";
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "../../core/defaults.ts";
+import { initDevStatus, setDevBusy } from "../../core/dev-status.ts";
 import type {
 	AutocompleteProviderFactory,
 	EditorFactory,
@@ -497,8 +498,6 @@ export class InteractiveMode {
 	private eulerDensity: SidebarDensity = "comfortable";
 	private eulerPrefsLoaded = false;
 	private eulerUsage?: EulerUsage;
-	private devAgentBusy = false;
-	private devCompactionBusy = false;
 	private fullscreenLayoutRoot: Component | undefined;
 	private pendingMessagesContainer: Container;
 	private statusContainer: Container;
@@ -1075,7 +1074,7 @@ export class InteractiveMode {
 		// Start the UI before initializing extensions so session_start handlers can use interactive dialogs
 		this.ui.start();
 		this.isInitialized = true;
-		this.writeDevStatus(false);
+		initDevStatus();
 		this.programStatus.report();
 		this.ensurePngTranscoder();
 
@@ -3607,7 +3606,7 @@ export class InteractiveMode {
 
 		switch (event.type) {
 			case "agent_start":
-				this.setDevBusy("agent", true);
+				setDevBusy("agent", true);
 				this.pendingTools.clear();
 				// Restore main escape handler if retry handler is still active
 				// (retry success event fires later, but we need main handler now)
@@ -3861,7 +3860,7 @@ export class InteractiveMode {
 				break;
 
 			case "agent_settled":
-				this.setDevBusy("agent", false);
+				setDevBusy("agent", false);
 				// The session records deferred user bash results when the run settles; show them there too.
 				this.flushPendingBashComponents();
 				this.ui.requestRender();
@@ -3869,7 +3868,7 @@ export class InteractiveMode {
 				break;
 
 			case "compaction_start": {
-				this.setDevBusy("compaction", true);
+				setDevBusy("compaction", true);
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(true);
 				}
@@ -3890,7 +3889,7 @@ export class InteractiveMode {
 			}
 
 			case "compaction_end": {
-				this.setDevBusy("compaction", false);
+				setDevBusy("compaction", false);
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(false);
 				}
@@ -7390,23 +7389,6 @@ export class InteractiveMode {
 		if (!active) return snapshot;
 		const rank = (provider: string) => (provider === active ? 0 : 1);
 		return { ...snapshot, accounts: [...snapshot.accounts].sort((a, b) => rank(a.provider) - rank(b.provider)) };
-	}
-
-	/** `EULER_DEV_STATUS` is the dev supervisor's interlock; absent outside `euler --dev`. */
-	private writeDevStatus(busy: boolean): void {
-		const target = process.env.EULER_DEV_STATUS;
-		if (!target) return;
-		try {
-			fs.writeFileSync(target, JSON.stringify({ busy, pid: process.pid, updatedAt: Date.now() }));
-		} catch {
-			// Best effort: a broken status file must not break the UI.
-		}
-	}
-
-	private setDevBusy(kind: "agent" | "compaction", busy: boolean): void {
-		if (kind === "agent") this.devAgentBusy = busy;
-		else this.devCompactionBusy = busy;
-		this.writeDevStatus(this.devAgentBusy || this.devCompactionBusy);
 	}
 
 	/** `:context`: the same numbers as the footer, in one place. */
