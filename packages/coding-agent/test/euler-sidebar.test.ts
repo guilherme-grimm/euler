@@ -57,6 +57,9 @@ function setup(density: SidebarDensity = "comfortable") {
 		},
 		onOpen: (path) => events.push(`open:${path}`),
 		onOpenExternal: (thread) => events.push(`openExternal:${thread.threadId}`),
+		onShowExternal: (thread) => events.push(`showExternal:${thread.threadId}`),
+		onSendExternal: (thread) => events.push(`sendExternal:${thread.threadId}`),
+		onStartExternal: () => events.push("startExternal"),
 		onNew: () => events.push("new"),
 		onHide: () => events.push("hide"),
 		onBlur: () => events.push("blur"),
@@ -163,8 +166,11 @@ describe("euler sidebar", () => {
 		);
 		sidebar.selectCurrent();
 		sidebar.handleInput("G");
+		sidebar.handleInput("d");
+		sidebar.handleInput("s");
+		sidebar.handleInput("N");
 		sidebar.handleInput("\r");
-		assert.deepEqual(events, ["openExternal:mcp:2"]);
+		assert.deepEqual(events, ["showExternal:mcp:2", "sendExternal:mcp:2", "startExternal", "openExternal:mcp:2"]);
 	});
 
 	it("navigates with j/k/gg/G and opens with enter", () => {

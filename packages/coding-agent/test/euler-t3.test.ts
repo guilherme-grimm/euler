@@ -1,6 +1,6 @@
 import assert from "node:assert";
 import { describe, it } from "vitest";
-import { isT3Live, parseThreads, T3Client } from "../src/modes/euler/euler-t3.ts";
+import { isT3Live, parseThreadDetail, parseThreads, T3Client } from "../src/modes/euler/euler-t3.ts";
 
 describe("t3 adapter", () => {
 	it("maps thread list rows", () => {
@@ -27,6 +27,30 @@ describe("t3 adapter", () => {
 			link: "http://127.0.0.1:3773/thread",
 			updatedAt: "2026-11-09T16:51:58.631Z",
 		});
+	});
+
+	it("parses thread detail and messages", () => {
+		const detail = parseThreadDetail({
+			thread: {
+				threadId: "mcp:1",
+				title: "add retry",
+				status: "completed",
+				branch: "feat/retry",
+				worktreePath: "/tmp/wt",
+				providerInstanceId: "pi",
+				model: "opencode-go/x",
+			},
+			messages: [
+				{ role: "user", text: "do it" },
+				{ role: "assistant", text: "done" },
+			],
+		});
+		assert.equal(detail?.thread.branch, "feat/retry");
+		assert.equal(detail?.thread.worktreePath, "/tmp/wt");
+		assert.deepEqual(detail?.messages, [
+			{ role: "user", text: "do it" },
+			{ role: "assistant", text: "done" },
+		]);
 	});
 
 	it("builds start args and returns the thread id", async () => {

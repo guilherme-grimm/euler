@@ -24,7 +24,7 @@ import {
 import { theme } from "../interactive/theme/theme.ts";
 import { BRAND_MARK, brand } from "./euler-look.ts";
 import type { EulerModeName, EulerStatusData } from "./euler-status.ts";
-import { isT3Live, type T3Snapshot, type T3StartOptions, type T3Thread } from "./euler-t3.ts";
+import { isT3Live, type T3Snapshot, type T3StartOptions, type T3Thread, type T3ThreadDetail } from "./euler-t3.ts";
 import type { UsageSnapshot, UsageWindow } from "./euler-usage.ts";
 import { compactTokens, until } from "./euler-voice.ts";
 import { EULER_STARTUP_HINT } from "./identity.ts";
@@ -141,6 +141,8 @@ export interface EulerHost {
 	t3Refresh(): void;
 	t3Open(link: string): void;
 	t3Snapshot(): T3Snapshot;
+	t3Show(threadId: string): Promise<T3ThreadDetail>;
+	t3Defaults(): T3StartOptions;
 }
 
 const SCROLL_OFF = 10;
@@ -1000,6 +1002,16 @@ export class EulerMode {
 			this.syncCursor();
 			return;
 		}
+		if (sub === "show") {
+			const thread = this.resolveT3Thread(tokens.shift());
+			if (!thread) {
+				this.message = "t3: unknown thread";
+				this.syncCursor();
+				return;
+			}
+			this.showT3Detail(thread);
+			return;
+		}
 		this.message = `not a t3 command: ${sub}`;
 		this.syncCursor();
 	}
@@ -1011,6 +1023,108 @@ export class EulerMode {
 		return Number.isInteger(index) && index > 0
 			? threads[index - 1]
 			: threads.find((thread) => thread.threadId === target);
+	}
+
+	/** Rail `d`: detail for the selected external thread, without opening the browser. */
+	showT3Thread(threadId: string): void {
+		const thread = this.host.t3Snapshot().threads.find((candidate) => candidate.threadId === threadId);
+		if (thread) this.showT3Detail(thread);
+	}
+
+	/** Rail `s`: send to the selected external thread. */
+	promptT3Send(threadId: string): void {
+		const short = threadId.split(":").at(-1)?.slice(0, 8) ?? threadId;
+		this.openT3Input("t3> ", `message to ${short}`, (text) => {
+			if (text.length === 0) return;
+			this.message = "t3: sending…";
+			this.syncCursor();
+			void this.host
+				.t3Send(threadId, text)
+				.then((reply) => {
+					this.host.t3Refresh();
+					this.message = `t3 · ${firstLine(reply).slice(0, 70)}`;
+					this.syncCursor();
+				})
+				.catch((error) => {
+					this.message = `t3: ${error instanceof Error ? error.message : String(error)}`;
+					this.syncCursor();
+				});
+		});
+	}
+
+	/** Rail `N`: start a thread with the last provider/model/worktree defaults. */
+	promptT3Start(): void {
+		const defaults = this.host.t3Defaults();
+		if (!defaults.provider || !defaults.model) {
+			this.message = "t3: set defaults once with :t3 start [--provider id --model slug] <message>";
+			this.syncCursor();
+			return;
+		}
+		const hint = [defaults.worktree ? `on ${defaults.worktree}` : "", `${defaults.provider} ${defaults.model}`]
+			.filter(Boolean)
+			.join(" · ");
+		this.openT3Input("t3 start> ", hint, (text) => {
+			if (text.length === 0) return;
+			this.message = "starting t3 thread…";
+			this.syncCursor();
+			void this.host
+				.t3Start(text, defaults)
+				.then((threadId) => {
+					this.host.t3Refresh();
+					this.message = `t3 started · ${threadId.split(":").at(-1)?.slice(0, 8) ?? threadId}`;
+					this.syncCursor();
+				})
+				.catch((error) => {
+					this.message = `t3: ${error instanceof Error ? error.message : String(error)}`;
+					this.syncCursor();
+				});
+		});
+	}
+
+	private showT3Detail(thread: T3Thread): void {
+		this.message = "t3: reading…";
+		this.syncCursor();
+		void this.host
+			.t3Show(thread.threadId)
+			.then((detail) => {
+				const shown = detail.thread;
+				const statusColor = shown.status === "failed" ? "error" : isT3Live(shown.status) ? "success" : "muted";
+				const lines = [
+					theme.bold(theme.fg("text", shown.title)),
+					`${theme.fg("dim", "status")} ${theme.fg(statusColor, shown.status)}${shown.model ? theme.fg("dim", ` · ${[shown.provider, shown.model].filter(Boolean).join(" ")}`) : ""}`,
+					shown.branch ? `${theme.fg("dim", "branch")} ${shown.branch}` : "",
+					shown.worktreePath ? `${theme.fg("dim", "worktree")} ${shown.worktreePath}` : "",
+					shown.link ? `${theme.fg("dim", "link")} ${shown.link}` : "",
+					"",
+					...detail.messages.map(
+						(message) => `${theme.fg("dim", `${message.role}:`)} ${firstLine(message.text).slice(0, 100)}`,
+					),
+					"",
+					theme.fg("dim", ":t3 open <n> to review in T3 · any key closes"),
+				].filter((line) => line.length > 0);
+				this.message = "";
+				this.showPopup("t3 thread", () => lines, 76);
+			})
+			.catch((error) => {
+				this.message = `t3: ${error instanceof Error ? error.message : String(error)}`;
+				this.syncCursor();
+			});
+	}
+
+	private openT3Input(prompt: string, placeholder: string, submit: (value: string) => void): void {
+		if (this.overlay) this.closeOverlay();
+		const input = new Input({ prompt, placeholder });
+		const box = new Box(1, 0, (text) => theme.bg("selectedBg", text));
+		box.addChild(input);
+		input.onSubmit = (value) => {
+			this.closeOverlay();
+			submit(value.trim());
+		};
+		input.onEscape = () => this.closeOverlay();
+		this.overlay = this.host.ui.showOverlay(box, { anchor: "bottom-left", width: "70%", offsetY: -3 });
+		this.host.ui.setFocus(input);
+		this.mode = "command";
+		this.host.ui.requestRender();
 	}
 
 	private showT3(): void {

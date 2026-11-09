@@ -117,7 +117,15 @@ function setup() {
 		t3Open: (link) => {
 			recorded.opened.push(`t3Open:${link}`);
 		},
-		t3Snapshot: () => ({ available: true, threads: [] }),
+		t3Snapshot: () => ({
+			available: true,
+			threads: [{ threadId: "mcp:test", title: "test thread", status: "completed" }],
+		}),
+		t3Show: async (threadId) => ({
+			thread: { threadId, title: "test", status: "completed" },
+			messages: [],
+		}),
+		t3Defaults: () => ({ provider: "pi", model: "opencode-go/x", worktree: "main" }),
 		contextReport: () => ({
 			model: "DeepSeek V4.1 Flash",
 			tokens: 447_138,
@@ -486,6 +494,19 @@ describe("EulerMode", () => {
 		terminal.sendInput("\r");
 		await settle(terminal);
 		assert.deepEqual(recorded.opened, ["t3Start:fix it:main"]);
+	});
+
+	it("opens t3 detail for an external thread", async () => {
+		const { terminal, tui } = setup();
+		await settle(terminal);
+		terminal.sendInput("\x1b");
+		terminal.sendInput(":");
+		await settle(terminal);
+		for (const char of "t3 show 1") terminal.sendInput(char);
+		terminal.sendInput("\r");
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		await settle(terminal);
+		assert.equal(tui.hasOverlayEntries, true);
 	});
 
 	it("keeps the cheatsheet open when the opening key releases", async () => {

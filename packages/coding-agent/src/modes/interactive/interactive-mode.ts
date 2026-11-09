@@ -504,6 +504,7 @@ export class InteractiveMode {
 	private eulerT3Snapshot: T3Snapshot = { available: false, threads: [] };
 	private eulerT3Request = 0;
 	private eulerT3Timer?: ReturnType<typeof setInterval>;
+	private eulerT3Defaults: T3StartOptions = {};
 	private fullscreenLayoutRoot: Component | undefined;
 	private pendingMessagesContainer: Container;
 	private statusContainer: Container;
@@ -7483,8 +7484,19 @@ export class InteractiveMode {
 
 	private async startEulerT3(message: string, options: T3StartOptions): Promise<string> {
 		const threadId = await this.ensureEulerT3().start(message, options);
+		this.rememberT3Defaults(options);
 		await this.refreshEulerT3();
 		return threadId;
+	}
+
+	/** Remember the last explicit routing choices so rail `N` only needs a message. */
+	private rememberT3Defaults(options: T3StartOptions): void {
+		const next = { ...this.eulerT3Defaults };
+		if (options.worktree) next.worktree = options.worktree;
+		if (options.provider) next.provider = options.provider;
+		if (options.model) next.model = options.model;
+		this.eulerT3Defaults = next;
+		this.saveEulerPrefs();
 	}
 
 	private async sendEulerT3(threadId: string, message: string): Promise<string> {
@@ -7574,6 +7586,9 @@ export class InteractiveMode {
 				if (thread.link) this.openExternalLink(thread.link);
 				else this.showWarning("That T3 thread has no link");
 			},
+			onShowExternal: (thread) => this.eulerMode?.showT3Thread(thread.threadId),
+			onSendExternal: (thread) => this.eulerMode?.promptT3Send(thread.threadId),
+			onStartExternal: () => this.eulerMode?.promptT3Start(),
 			onNew: () => {
 				this.closeEulerSidebar();
 				void this.handleClearCommand();
@@ -7683,8 +7698,13 @@ export class InteractiveMode {
 		try {
 			const raw = JSON.parse(fs.readFileSync(path.join(getAgentDir(), "euler-ui.json"), "utf8")) as {
 				density?: string;
+				t3?: { worktree?: unknown; provider?: unknown; model?: unknown };
 			};
 			if (raw.density === "compact" || raw.density === "comfortable") this.eulerDensity = raw.density;
+			for (const key of ["worktree", "provider", "model"] as const) {
+				const value = raw.t3?.[key];
+				if (typeof value === "string" && value.length > 0) this.eulerT3Defaults[key] = value;
+			}
 		} catch {
 			// First run or unreadable file: the default density is good enough.
 		}
@@ -7694,7 +7714,7 @@ export class InteractiveMode {
 		try {
 			fs.writeFileSync(
 				path.join(getAgentDir(), "euler-ui.json"),
-				`${JSON.stringify({ density: this.eulerDensity }, null, "\t")}\n`,
+				`${JSON.stringify({ density: this.eulerDensity, t3: this.eulerT3Defaults }, null, "\t")}\n`,
 			);
 		} catch {
 			// Best effort: a read-only agent dir must not break the rail.
@@ -7906,6 +7926,8 @@ export class InteractiveMode {
 			},
 			t3Open: (link) => this.openExternalLink(link),
 			t3Snapshot: () => this.eulerT3Snapshot,
+			t3Show: (threadId) => this.ensureEulerT3().show(threadId),
+			t3Defaults: () => this.eulerT3Defaults,
 			refreshUsage: () => {
 				void this.ensureEulerUsage().refresh();
 			},

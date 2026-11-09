@@ -73,6 +73,12 @@ export interface SidebarOptions {
 	onOpen: (path: string) => void;
 	/** Open a T3 Code thread (browser link). */
 	onOpenExternal: (thread: SidebarExternal) => void;
+	/** Show details for a T3 Code thread. */
+	onShowExternal: (thread: SidebarExternal) => void;
+	/** Send a message to a T3 Code thread. */
+	onSendExternal: (thread: SidebarExternal) => void;
+	/** Start a new T3 Code thread. */
+	onStartExternal: () => void;
 	onNew: () => void;
 	onHide: () => void;
 	/** Hand focus back to the transcript while keeping the rail visible. */
@@ -294,6 +300,19 @@ export class EulerSidebar implements Component, Focusable {
 			}
 			case "n":
 				this.options.onNew();
+				return;
+			case "d": {
+				const row = rows[this.selected];
+				if (row?.external) this.options.onShowExternal(row.external);
+				return;
+			}
+			case "s": {
+				const row = rows[this.selected];
+				if (row?.external) this.options.onSendExternal(row.external);
+				return;
+			}
+			case "N":
+				this.options.onStartExternal();
 				return;
 			case "r":
 				this.options.onRefresh();

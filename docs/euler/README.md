@@ -213,13 +213,19 @@ so `~/.t3/bin/t3` is enough. Install it as a background service when you want it
 ```
 
 `:t3` lists the project's background threads; the rail's `EXTERNAL` section mirrors them every five
-seconds. `Enter` on an external row opens the thread in T3's UI, where diffs and PRs live.
+seconds. On an external row, `Enter` opens the thread in T3's UI, `d` shows status/branch/worktree/
+last messages in a popup, and `s` sends a message without leaving Euler. `N` in the rail starts a new
+thread from the saved routing defaults (`provider`, `model`, `worktree`).
 
 ```text
 :t3 start --worktree main --provider pi --model opencode-go/deepseek-v4.1-flash "fix the flaky test"
+:t3 show 1                                  # detail popup, same as `d` in the rail
 :t3 send 1 "also add a regression test"     # index from :t3, or a full thread id
 :t3 open 1
 ```
+
+The first successful `:t3 start` remembers `--worktree/--provider/--model` in
+`~/.pi/agent/euler-ui.json`, so afterwards `:t3 start "…"` and the rail's `N` only need a message.
 
 Notes:
 

@@ -30,6 +30,16 @@ export interface T3Snapshot {
 	threads: T3Thread[];
 }
 
+export interface T3Message {
+	role: string;
+	text: string;
+}
+
+export interface T3ThreadDetail {
+	thread: T3Thread;
+	messages: T3Message[];
+}
+
 export interface T3StartOptions {
 	worktree?: string;
 	branch?: string;
@@ -95,6 +105,24 @@ function text(value: unknown): string | undefined {
 }
 
 /** T3's list payload is an array; tolerate an envelope if a release wraps it. */
+function parseThread(value: unknown): T3Thread | undefined {
+	const row = record(value);
+	if (!row) return undefined;
+	const threadId = text(row.threadId) ?? text(row.id);
+	if (!threadId) return undefined;
+	return {
+		threadId,
+		title: text(row.title) ?? threadId,
+		status: text(row.status) ?? "unknown",
+		provider: text(row.providerInstanceId) ?? text(row.provider),
+		model: text(row.model),
+		branch: text(row.branch),
+		worktreePath: text(row.worktreePath),
+		link: text(row.link),
+		updatedAt: text(row.updatedAt) ?? text(row.createdAt),
+	};
+}
+
 export function parseThreads(payload: unknown): T3Thread[] {
 	const rows = Array.isArray(payload)
 		? payload
@@ -102,24 +130,22 @@ export function parseThreads(payload: unknown): T3Thread[] {
 			? (record(payload)?.threads as unknown[])
 			: [];
 	return rows.flatMap((value) => {
+		const thread = parseThread(value);
+		return thread ? [thread] : [];
+	});
+}
+
+export function parseThreadDetail(payload: unknown): T3ThreadDetail | undefined {
+	const root = record(payload);
+	const thread = parseThread(root?.thread);
+	if (!thread) return undefined;
+	const rows = Array.isArray(root?.messages) ? root.messages : [];
+	const messages = rows.flatMap((value): T3Message[] => {
 		const row = record(value);
 		if (!row) return [];
-		const threadId = text(row.threadId) ?? text(row.id);
-		if (!threadId) return [];
-		return [
-			{
-				threadId,
-				title: text(row.title) ?? threadId,
-				status: text(row.status) ?? "unknown",
-				provider: text(row.providerInstanceId) ?? text(row.provider),
-				model: text(row.model),
-				branch: text(row.branch),
-				worktreePath: text(row.worktreePath),
-				link: text(row.link),
-				updatedAt: text(row.updatedAt) ?? text(row.createdAt),
-			},
-		];
+		return [{ role: text(row.role) ?? "unknown", text: text(row.text) ?? "" }];
 	});
+	return { thread, messages };
 }
 
 /** `running`, `preparing`, `queued`… anything the UI should animate. */
@@ -186,5 +212,13 @@ export class T3Client {
 		if (failure) throw new Error(failure);
 		const reply = text(payload?.reply);
 		return reply && reply.trim().length > 0 ? reply : (text(payload?.status) ?? "sent");
+	}
+
+	async show(threadId: string, messages = 8): Promise<T3ThreadDetail> {
+		const detail = parseThreadDetail(
+			await this.exec(["thread", "show", threadId, "--json", "--messages", String(messages)]),
+		);
+		if (!detail) throw new Error("t3 returned no thread");
+		return detail;
 	}
 }
