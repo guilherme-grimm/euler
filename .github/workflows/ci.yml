@@ -8,6 +8,7 @@ on:
     tags: ['v*.*.*']
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 # Lint, types and tests only. A read-only token makes it impossible for any step to publish
 # a tag, release, package or registry entry.
