@@ -10,7 +10,18 @@ vim-flavoured interaction layer over the fullscreen transcript. It is a drop-in 
 itself stays stock Pi — the layer runs through the `euler` binary or the explicit `--ui euler`.
 
 Status: **MVP+**. Modal navigation, quotes, thread forks, the rail, and the `:usage` / `:context`
-panels work. The input editor is still plain insert mode (see [Roadmap](#roadmap)).
+panels work. The input editor is still plain insert mode (see [Roadmap](#roadmap)). New here? The
+[root README](../../README.md#first-five-minutes) has a five-minute walkthrough and a still.
+
+## What Euler is not
+
+- **Not an orchestrator.** No worktrees, parallel agents, sandboxes, cloud machines or phone clients.
+  One agent, one workspace, deep control over its context. Pair it with `tmux`/`herdr` for panes.
+- **Not a diff or PR tool.** It reads and quotes output and hands off to `$EDITOR`; review stays
+  where you already do it.
+- **Not a new agent.** It is a UI over Pi: models, auth, tools, skills, extensions and sessions are
+  Pi's.
+
 
 ## Identity
 

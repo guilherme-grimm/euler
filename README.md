@@ -36,6 +36,56 @@ skills, MCP servers, codemode, models and credentials — because it reads the s
 **Pi stays Pi.** `pi` is stock Pi; the modal layer only runs through the `euler` binary (or the
 explicit `pi --ui euler` flag). No environment variable changes what `pi` is.
 
+## Interface
+
+Rendered from the real components at 101×18, colours stripped (braille is the live spinner):
+
+```text
+ ❯ euler                     ⠇│   › refactor the auth module
+──────────────────────────────│
+ WORKING                     1│   Here is the plan.
+▎⠇ refactor the auth module   │   · extract the session store
+   214 msgs · 12s             │   · add tests
+ IDLE                        3│
+ ○ statusline voice           │   › quoted · euler-sidebar.ts:88
+   12 msgs · 2h               │   > keep the rail read-only; cache the order
+ ○ └ Fork: theme pass         │   > per snapshot and invalidate on refresh.
+     ↳ 4 msgs · 5h            │
+ ◆ README pass                │   Ready to patch.
+   no messages yet · 3d       │
+                              │
+                              │
+                              │
+                              │
+                              │
+ j/k · / · v view · ⏎         │
+─────────────────────────────────────────────────────────────────────────────────────────────────────
+▎NORMAL  refactor the auth module                     ⠇ working 12s · 5h 23% · 42/512 · Opus 4.5 high
+```
+
+Rail on the left (`WORKING`/`IDLE`, fork nesting, unread), transcript in the middle, statusline below
+(mode, thread, spinner, plan window, position, model + thinking). `?`, `:usage` and `:context` open
+as floating popups over the transcript.
+
+## First five minutes
+
+1. Run `euler`. It starts in **insert** mode: type, paste, `@file`, `/login` — the editor is Pi's.
+2. `Esc` enters **normal** mode. `hjkl`, `w/b/e`, `gg/G`, `/` — the transcript is the buffer.
+3. `v` / `V` select, then `q` (or `"`) quotes the selection into the conversation.
+4. `f` forks the thread at the leaf, `F` rewinds before a prompt; `<space>e` opens the rail.
+5. `:usage` shows plan windows, `:context` the window/compaction math, `:model` switches models,
+   `?` opens the full keymap.
+
+## What Euler is not
+
+- **Not an orchestrator.** No worktrees, parallel agents, sandboxes, cloud machines or phone clients.
+  One agent, one workspace, deep control over its context. Pair it with `tmux`/`herdr` if you want
+  panes.
+- **Not a diff or PR tool.** It reads and quotes output and hands off to `$EDITOR`; review stays where
+  you already do it.
+- **Not a new agent.** It is a UI over Pi: models, auth, tools, skills, extensions and sessions are
+  Pi's.
+
 ## Install
 
 Euler is a fork, not an npm package — it installs from a checkout and keeps using Pi's `~/.pi/agent`
@@ -76,6 +126,9 @@ and the architecture seams that keep this fork mergeable.
 
 > The remaining README is upstream Pi's. Its install script (`curl -fsSL https://pi.dev/install.sh |
 > sh`) installs **Pi**, not Euler — use the source install above for Euler.
+
+<details>
+<summary><strong>Upstream Pi README (unchanged)</strong></summary>
 
 Pi is a minimal, extensible agent harness that you can make your own.
 
@@ -269,3 +322,5 @@ MIT
   <br /><br />
   <a href="https://exe.dev"><img src="packages/coding-agent/docs/images/exy.png" alt="Exy mascot" width="48" /><br />exe.dev</a>
 </p>
+
+</details>
