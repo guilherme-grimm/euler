@@ -58,7 +58,8 @@ export type EulerAction =
 	| "newSession"
 	| "command"
 	| "focusSidebar"
-	| "focusTranscript";
+	| "focusTranscript"
+	| "goToFile";
 
 export interface KeymapEntry {
 	/** Space-separated key tokens, e.g. `"g g"`, `"space s"`, `"ctrl+d"`. */
@@ -97,6 +98,7 @@ export const KEYMAP: readonly KeymapEntry[] = [
 	{ keys: "^", modes: BOTH, group: "move", desc: "first non-blank", action: "firstNonBlank" },
 	{ keys: "$", modes: BOTH, group: "move", desc: "line end", action: "lineEnd" },
 	{ keys: "g g", modes: BOTH, group: "move", desc: "first line", action: "docStart" },
+	{ keys: "g f", modes: NORMAL, group: "move", desc: "view file under cursor", action: "goToFile" },
 	{ keys: "G", modes: BOTH, group: "move", desc: "last line (or N G)", action: "docEnd" },
 	{ keys: "{", modes: BOTH, group: "move", desc: "paragraph up", action: "paragraphUp" },
 	{ keys: "}", modes: BOTH, group: "move", desc: "paragraph down", action: "paragraphDown" },

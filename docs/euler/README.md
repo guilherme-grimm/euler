@@ -99,6 +99,7 @@ normal mode; `i` returns to insert.
 | both | `f` | **fork the thread** at the leaf (same context, new session file) |
 | both | `F` | **rewind-fork** before the prompt at/under the cursor |
 | both | `/` `n` `N` | search the transcript, next/previous match |
+| normal | `g f` | open the file under the cursor (`:view`) |
 | normal | `<space>e` | toggle the thread sidebar |
 | normal | `<space>n` | new thread |
 | normal | `Ctrl-h` / `Ctrl-l` | focus the sidebar / back to the transcript |
@@ -196,8 +197,22 @@ editor is focused, so those panels keep their own keys (typing filters, arrows m
 `:q` · `:q!` · `:quit` · `:wq` · `:x` quit · `:help` opens the cheatsheet · `:e` (or `:edit`) hands
 the prompt to `$VISUAL`/`$EDITOR` · `:threads` toggles the rail · `:density` toggles rail rows ·
 `:model` opens pi's model picker · `:usage` lists plan windows in percent · `:context` shows the
-window and compaction threshold · `:t3` drives background T3 Code threads · `:new` starts a session ·
-`:fork` forks the current thread. Anything else reports `not a command: :foo`.
+window and compaction threshold · `:view [path][:line]` opens a file · `:diff [path]` shows
+`git diff HEAD` · `:t3` drives background T3 Code threads · `:new` starts a session · `:fork` forks
+the current thread. Anything else reports `not a command: :foo`.
+
+## Code view and diffs
+
+`:view [path][:line]` opens a scrollable viewer with line numbers and syntax highlighting. With no
+argument it follows the path under the transcript cursor, and `g f` does the same from normal mode.
+`:diff [path]` renders `git diff HEAD` — every tracked change, or one path — with green additions,
+red removals and highlighted hunks.
+
+Viewer keys: `j`/`k` scroll, `Ctrl-d`/`Ctrl-u` half page, `Ctrl-f`/`Ctrl-b` page, `gg`/`G` ends,
+`q`/`Esc` close.
+
+Limits: files up to 512 KiB and 5000 lines; the viewer is read-only, has no horizontal scroll or
+search yet, and untracked files need `:view` because `git diff` ignores them.
 
 ## External threads (T3 Code)
 

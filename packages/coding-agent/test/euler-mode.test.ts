@@ -99,6 +99,7 @@ function setup() {
 		hasForeignFocus: () => focus.foreign,
 		sessionName: () => "test-session",
 		parentName: () => undefined,
+		cwd: () => process.cwd(),
 		modelInfo: () => ({ name: "Opus 4.5", thinking: "high" }),
 		showModels: () => {
 			recorded.opened.push("models");
@@ -507,6 +508,22 @@ describe("EulerMode", () => {
 		await new Promise((resolve) => setTimeout(resolve, 50));
 		await settle(terminal);
 		assert.equal(tui.hasOverlayEntries, true);
+	});
+
+	it("opens a file in the code viewer", async () => {
+		const { terminal, tui } = setup();
+		await settle(terminal);
+		terminal.sendInput("\x1b");
+		terminal.sendInput(":");
+		await settle(terminal);
+		for (const char of "view package.json") terminal.sendInput(char);
+		terminal.sendInput("\r");
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		await settle(terminal);
+		assert.equal(tui.hasOverlayEntries, true);
+		terminal.sendInput("q");
+		await settle(terminal);
+		assert.equal(tui.hasOverlayEntries, false);
 	});
 
 	it("keeps the cheatsheet open when the opening key releases", async () => {

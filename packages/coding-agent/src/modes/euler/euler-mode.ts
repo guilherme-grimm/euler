@@ -22,10 +22,19 @@ import {
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import { theme } from "../interactive/theme/theme.ts";
+import {
+	type CodeTarget,
+	type CodeView,
+	detectPathAt,
+	loadDiffView,
+	loadFileView,
+	resolveCodePath,
+} from "./euler-code.ts";
 import { BRAND_MARK, brand } from "./euler-look.ts";
 import type { EulerModeName, EulerStatusData } from "./euler-status.ts";
 import { isT3Live, type T3Snapshot, type T3StartOptions, type T3Thread, type T3ThreadDetail } from "./euler-t3.ts";
 import type { UsageSnapshot, UsageWindow } from "./euler-usage.ts";
+import { EulerViewer } from "./euler-viewer.ts";
 import { compactTokens, until } from "./euler-voice.ts";
 import { EULER_STARTUP_HINT } from "./identity.ts";
 import {
@@ -122,6 +131,8 @@ export interface EulerHost {
 	hasForeignFocus(): boolean;
 	sessionName(): string;
 	parentName(): string | undefined;
+	/** Session working directory, used to resolve file paths. */
+	cwd(): string;
 	/** Active model + thinking level for the statusline chip. */
 	modelInfo(): { name: string; thinking?: string } | undefined;
 	/** Open pi's model picker (`:model`). */
@@ -488,6 +499,16 @@ export class EulerMode {
 			case "focusTranscript":
 				this.host.leaveSidebar();
 				return;
+			case "goToFile": {
+				const target = this.detectPathAtCursor();
+				if (!target) {
+					this.message = "no file under the cursor";
+					this.syncCursor();
+					return;
+				}
+				this.openCodeView(`${target.path}${target.line ? `:${target.line}` : ""}`);
+				return;
+			}
 		}
 	}
 
@@ -742,6 +763,14 @@ export class EulerMode {
 
 	private runCommand(raw: string): void {
 		const command = raw.replace(/^\s*:?\s*/, "");
+		if (command === "view" || command.startsWith("view ")) {
+			this.openCodeView(command.slice(4).trim());
+			return;
+		}
+		if (command === "diff" || command.startsWith("diff ")) {
+			this.openCodeDiff(command.slice(4).trim());
+			return;
+		}
 		if (command === "t3" || command.startsWith("t3 ")) {
 			this.runT3(command.slice(2).trim());
 			return;
@@ -1109,6 +1138,75 @@ export class EulerMode {
 				this.message = `t3: ${error instanceof Error ? error.message : String(error)}`;
 				this.syncCursor();
 			});
+	}
+
+	private openCodeView(raw: string): void {
+		const cwd = this.host.cwd();
+		const target = raw.trim().length > 0 ? resolveCodePath(cwd, raw) : this.detectPathAtCursor();
+		if (!target) {
+			this.message = raw.trim().length > 0 ? `view: not a file: ${raw.trim()}` : "view: no file under the cursor";
+			this.syncCursor();
+			return;
+		}
+		this.message = "reading…";
+		this.syncCursor();
+		void Promise.resolve()
+			.then(() => loadFileView(cwd, target))
+			.then((view) => {
+				this.message = "";
+				this.openViewer(view);
+			})
+			.catch((error) => {
+				this.message = `view: ${error instanceof Error ? error.message : String(error)}`;
+				this.syncCursor();
+			});
+	}
+
+	private openCodeDiff(raw: string): void {
+		const cwd = this.host.cwd();
+		const target = raw.trim().length > 0 ? resolveCodePath(cwd, raw.trim()) : undefined;
+		if (raw.trim().length > 0 && !target) {
+			this.message = `diff: not a file: ${raw.trim()}`;
+			this.syncCursor();
+			return;
+		}
+		this.message = "reading diff…";
+		this.syncCursor();
+		void loadDiffView(cwd, target?.path)
+			.then((view) => {
+				this.message = "";
+				this.openViewer(view);
+			})
+			.catch((error) => {
+				this.message = `diff: ${error instanceof Error ? error.message : String(error)}`;
+				this.syncCursor();
+			});
+	}
+
+	private detectPathAtCursor(): CodeTarget | undefined {
+		const doc = this.doc();
+		if (!doc) return undefined;
+		return detectPathAt(doc.text(this.cursor.row), this.host.cwd());
+	}
+
+	private openViewer(view: CodeView): void {
+		this.closeOverlay();
+		const height = Math.max(8, this.host.ui.terminal.rows - 2);
+		const width = Math.min(Math.max(20, this.host.ui.terminal.columns - 2), 160);
+		const viewer = new EulerViewer({ title: view.title, lines: view.lines, height, focusLine: view.focusLine });
+		this.overlay = this.host.ui.showOverlay(viewer, { anchor: "center", width, maxHeight: height });
+		const listener = (data: string) => {
+			if (isKeyRelease(data)) return undefined;
+			const result = viewer.handleKey(data);
+			if (result === "close") {
+				this.closeOverlay();
+				return { consume: true };
+			}
+			if (result === "handled") this.host.ui.requestRender();
+			return { consume: true };
+		};
+		this.overlayKeyListener = listener;
+		this.host.ui.addInputListener(listener);
 	}
 
 	private openT3Input(prompt: string, placeholder: string, submit: (value: string) => void): void {

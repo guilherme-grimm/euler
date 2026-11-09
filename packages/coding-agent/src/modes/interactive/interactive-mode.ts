@@ -7914,6 +7914,7 @@ export class InteractiveMode {
 			},
 			sessionName: () => this.currentSessionLabel(),
 			parentName: () => this.parentSessionLabel(),
+			cwd: () => this.sessionManager.getCwd(),
 			modelInfo: () => this.eulerModelInfo(),
 			showModels: () => this.showModelSelector(),
 			usageSegment: () => this.eulerUsageSegment(),

@@ -30,6 +30,7 @@ skills, MCP servers, codemode, models and credentials — because it reads the s
 | **Model & limits** | `:model` opens Pi's picker from normal mode; the statusline carries the active model and thinking level plus the most-consumed plan window |
 | **Plan usage** | `:usage` reads subscription windows in percent for Claude, Codex and OpenCode Go, with reset countdowns and 50%/80% bars |
 | **Context** | `:context` shows tokens against the window, the compaction threshold and reserve, the last request's cache split, and session counts |
+| **Code view** | `:view [path][:line]` / `g f` opens a numbered, highlighted file; `:diff [path]` renders `git diff HEAD` with green/red hunks |
 | **Statusline** | brand bar + mode, thread name, live spinner, plan window, position, model — the chip and quota drop first when the line is tight |
 | **Durable fork** | `tools/euler/upstream-gate.mjs` classifies upstream drift as safe / review / blocked before you merge a Pi release |
 | **Dogfooding** | `euler --dev` / `npm run dev`: restart from source, queued until the current turn settles, so the agent can edit its own UI |
