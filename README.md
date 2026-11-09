@@ -25,10 +25,13 @@ skills, MCP servers, codemode, models and credentials — because it reads the s
 | **Modal transcript** | normal/visual modes over rendered output: `hjkl`, `w/b/e`, `W/B/E`, `gg/G`, `H/M/L`, `{ }`, counts, `Ctrl-d/u/f/b`, `/` search |
 | **Quotes** | select output and quote it: a persistent `custom_message` that becomes part of the conversation's context, with provenance |
 | **Threads** | fork a session at any point into a new one that inherits the full branch (compaction included); a rail lists threads with parent lineage |
-| **ADE surface** | persistent thread rail (`<space>e`), external editor handoff (`:e`, `ctrl+g`), `@file` mentions, `:new` / `:fork` / `:threads` |
-| **Signal** | lualine-style statusline: mode block, position, session, fork parent, live indicator, unread markers |
+| **ADE surface** | persistent thread rail (`<space>e`) with `WORKING`/`IDLE` sections, density toggle (`v`), new thread (`<space>n`), external editor handoff (`:e`, `ctrl+g`), `@file` mentions, thread search |
+| **Model & limits** | `:model` opens Pi's picker from normal mode; the statusline carries the active model and thinking level plus the most-consumed plan window |
+| **Plan usage** | `:usage` reads subscription windows in percent for Claude, Codex and OpenCode Go, with reset countdowns and 50%/80% bars |
+| **Context** | `:context` shows tokens against the window, the compaction threshold and reserve, the last request's cache split, and session counts |
+| **Statusline** | brand bar + mode, thread name, live spinner, plan window, position, model — the chip and quota drop first when the line is tight |
 | **Durable fork** | `tools/euler/upstream-gate.mjs` classifies upstream drift as safe / review / blocked before you merge a Pi release |
-| **Dogfooding** | `npm run dev` restarts from source on save and resumes the session — no build step |
+| **Dogfooding** | `euler --dev` / `npm run dev`: restart from source, queued until the current turn settles, so the agent can edit its own UI |
 
 **Pi stays Pi.** `pi` is stock Pi; the modal layer only runs through the `euler` binary (or the
 explicit `pi --ui euler` flag). No environment variable changes what `pi` is.
@@ -40,8 +43,9 @@ npm install
 npm run build
 ln -s "$PWD/bin/euler" ~/.local/bin/euler
 euler                       # bun when available, node otherwise
+euler --dev                 # hot reload: source mode, restart on save, session resumed
 euler --continue            # resume this directory's last session
-npm run dev                 # dev loop: source mode, reload on save
+npm run dev                 # the same supervisor without the launcher
 ```
 
 Full guide: [docs/euler/README.md](docs/euler/README.md) — keys, quote/fork model, command line,
