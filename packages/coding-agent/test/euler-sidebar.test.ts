@@ -56,6 +56,7 @@ function setup(density: SidebarDensity = "comfortable") {
 			events.push(`density:${next}`);
 		},
 		onOpen: (path) => events.push(`open:${path}`),
+		onOpenExternal: (thread) => events.push(`openExternal:${thread.threadId}`),
 		onNew: () => events.push("new"),
 		onHide: () => events.push("hide"),
 		onBlur: () => events.push("blur"),
@@ -125,6 +126,45 @@ describe("euler sidebar", () => {
 		assert.ok(compact.some((line) => line.includes("refactor auth")));
 		assert.ok(!compact.some((line) => line.includes("12 msgs")), "compact rows have no metadata line");
 		assert.equal(compact.length, 20, "rail fills the viewport height");
+	});
+
+	it("renders T3 external threads and opens one", () => {
+		const { sidebar, snapshot, events } = setup();
+		snapshot.external = [
+			{
+				threadId: "mcp:1",
+				title: "add retry",
+				status: "running",
+				branch: "feat/retry",
+				provider: "pi",
+				model: "opencode-go/x",
+				updatedAt: new Date().toISOString(),
+			},
+			{
+				threadId: "mcp:2",
+				title: "dark mode",
+				status: "completed",
+				branch: "feat/dark",
+				updatedAt: new Date().toISOString(),
+			},
+		];
+		const plain = sidebar.render(30).map((line) => stripTerminalSequences(line));
+		assert.ok(
+			plain.some((line) => line.includes("EXTERNAL")),
+			"external section",
+		);
+		assert.ok(
+			plain.some((line) => line.includes("add retry")),
+			"title",
+		);
+		assert.ok(
+			plain.some((line) => line.includes("feat/retry")),
+			"branch metadata",
+		);
+		sidebar.selectCurrent();
+		sidebar.handleInput("G");
+		sidebar.handleInput("\r");
+		assert.deepEqual(events, ["openExternal:mcp:2"]);
 	});
 
 	it("navigates with j/k/gg/G and opens with enter", () => {

@@ -105,6 +105,19 @@ function setup() {
 		},
 		usageSegment: () => ({ label: "5h", percent: 23 }),
 		usage: () => ({ accounts: [], loading: false }),
+		t3Start: async (message, options) => {
+			recorded.opened.push(`t3Start:${message}:${options.worktree ?? ""}`);
+			return "mcp:test";
+		},
+		t3Send: async (threadId, message) => {
+			recorded.opened.push(`t3Send:${threadId}:${message}`);
+			return "ok";
+		},
+		t3Refresh: () => {},
+		t3Open: (link) => {
+			recorded.opened.push(`t3Open:${link}`);
+		},
+		t3Snapshot: () => ({ available: true, threads: [] }),
 		contextReport: () => ({
 			model: "DeepSeek V4.1 Flash",
 			tokens: 447_138,
@@ -451,6 +464,28 @@ describe("EulerMode", () => {
 		assert.ok(screen.includes("Context"), screen);
 		assert.ok(screen.includes("44.7%"), screen);
 		assert.equal(tui.hasOverlayEntries, true);
+	});
+
+	it("opens the t3 panel and starts a background thread", async () => {
+		const { terminal, tui, recorded } = setup();
+		await settle(terminal);
+		terminal.sendInput("\x1b");
+		terminal.sendInput(":");
+		await settle(terminal);
+		for (const char of "t3") terminal.sendInput(char);
+		terminal.sendInput("\r");
+		await settle(terminal);
+		assert.equal(tui.hasOverlayEntries, true);
+		terminal.sendInput("x");
+		await settle(terminal);
+		assert.equal(tui.hasOverlayEntries, false);
+
+		terminal.sendInput(":");
+		await settle(terminal);
+		for (const char of "t3 start --worktree main fix it") terminal.sendInput(char);
+		terminal.sendInput("\r");
+		await settle(terminal);
+		assert.deepEqual(recorded.opened, ["t3Start:fix it:main"]);
 	});
 
 	it("keeps the cheatsheet open when the opening key releases", async () => {

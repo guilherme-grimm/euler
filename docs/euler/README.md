@@ -196,8 +196,40 @@ editor is focused, so those panels keep their own keys (typing filters, arrows m
 `:q` · `:q!` · `:quit` · `:wq` · `:x` quit · `:help` opens the cheatsheet · `:e` (or `:edit`) hands
 the prompt to `$VISUAL`/`$EDITOR` · `:threads` toggles the rail · `:density` toggles rail rows ·
 `:model` opens pi's model picker · `:usage` lists plan windows in percent · `:context` shows the
-window and compaction threshold · `:new` starts a session · `:fork` forks the current thread.
-Anything else reports `not a command: :foo`.
+window and compaction threshold · `:t3` drives background T3 Code threads · `:new` starts a session ·
+`:fork` forks the current thread. Anything else reports `not a command: :foo`.
+
+## External threads (T3 Code)
+
+Euler can drive [T3 Code](https://github.com/pingdotgg/t3code) as an optional orchestration backend:
+T3 owns git worktrees, provider/model routing and PRs; Euler lists and steers the threads.
+
+Requirements: T3 Code installed and its server running. On this machine the host CLI needs no sign-in,
+so `~/.t3/bin/t3` is enough. Install it as a background service when you want it always on:
+
+```bash
+~/.t3/bin/t3 service install   # or `t3 service install` once t3 is on PATH
+~/.t3/bin/t3 service status
+```
+
+`:t3` lists the project's background threads; the rail's `EXTERNAL` section mirrors them every five
+seconds. `Enter` on an external row opens the thread in T3's UI, where diffs and PRs live.
+
+```text
+:t3 start --worktree main --provider pi --model opencode-go/deepseek-v4.1-flash "fix the flaky test"
+:t3 send 1 "also add a regression test"     # index from :t3, or a full thread id
+:t3 open 1
+```
+
+Notes:
+
+- `--model` must be in `provider/model` form (`opencode-go/…`, `anthropic/…`); `--provider` is the T3
+  provider instance id (`pi`, `codex`, `claudeAgent`, …).
+- `--worktree <base>` creates the isolated checkout and branch; omit it to run in the project folder.
+- T3 threads are separate from Euler sessions. Quotes, forks and the transcript stay in pi; the
+  `EXTERNAL` section is parallel work.
+- Polling is deliberate: the CLI offers `list/start/send/show --json`, not a stream. The adapter
+  degrades to a `t3 server not running` hint when the service is absent.
 
 ## Model
 

@@ -145,10 +145,12 @@ import {
 	EulerSidebar,
 	RECENT_WINDOW_MS,
 	type SidebarDensity,
+	type SidebarExternal,
 	type SidebarSnapshot,
 	type SidebarThread,
 } from "../euler/euler-sidebar.ts";
 import { EulerStatusLine } from "../euler/euler-status.ts";
+import { T3Client, type T3Snapshot, type T3StartOptions } from "../euler/euler-t3.ts";
 import { EulerUsage, type UsageSnapshot } from "../euler/euler-usage.ts";
 import { shortModelName } from "../euler/euler-voice.ts";
 import { EULER_APP_NAME } from "../euler/identity.ts";
@@ -498,6 +500,10 @@ export class InteractiveMode {
 	private eulerDensity: SidebarDensity = "comfortable";
 	private eulerPrefsLoaded = false;
 	private eulerUsage?: EulerUsage;
+	private eulerT3?: T3Client;
+	private eulerT3Snapshot: T3Snapshot = { available: false, threads: [] };
+	private eulerT3Request = 0;
+	private eulerT3Timer?: ReturnType<typeof setInterval>;
 	private fullscreenLayoutRoot: Component | undefined;
 	private pendingMessagesContainer: Container;
 	private statusContainer: Container;
@@ -7434,6 +7440,71 @@ export class InteractiveMode {
 		};
 	}
 
+	/** Lazily created so Euler without T3 never spawns the CLI at startup. */
+	private ensureEulerT3(): T3Client {
+		if (!this.eulerT3) this.eulerT3 = new T3Client({ cwd: this.sessionManager.getCwd() });
+		return this.eulerT3;
+	}
+
+	/** T3 list is a CLI call; guard against stale responses when refreshes overlap. */
+	private async refreshEulerT3(): Promise<void> {
+		const request = ++this.eulerT3Request;
+		const snapshot = await this.ensureEulerT3().list();
+		if (request !== this.eulerT3Request) return;
+		this.eulerT3Snapshot = snapshot;
+		this.ui.requestRender();
+	}
+
+	private startEulerT3Timer(): void {
+		if (this.eulerT3Timer) return;
+		this.eulerT3Timer = setInterval(() => void this.refreshEulerT3(), 5_000);
+		this.eulerT3Timer.unref?.();
+	}
+
+	private stopEulerT3Timer(): void {
+		if (!this.eulerT3Timer) return;
+		clearInterval(this.eulerT3Timer);
+		this.eulerT3Timer = undefined;
+	}
+
+	private eulerT3Rows(): SidebarExternal[] {
+		return this.eulerT3Snapshot.threads.map((thread) => ({
+			threadId: thread.threadId,
+			title: thread.title,
+			status: thread.status,
+			provider: thread.provider,
+			model: thread.model,
+			branch: thread.branch,
+			worktreePath: thread.worktreePath,
+			link: thread.link,
+			updatedAt: thread.updatedAt,
+		}));
+	}
+
+	private async startEulerT3(message: string, options: T3StartOptions): Promise<string> {
+		const threadId = await this.ensureEulerT3().start(message, options);
+		await this.refreshEulerT3();
+		return threadId;
+	}
+
+	private async sendEulerT3(threadId: string, message: string): Promise<string> {
+		const reply = await this.ensureEulerT3().send(threadId, message);
+		await this.refreshEulerT3();
+		return reply;
+	}
+
+	private openExternalLink(link: string): void {
+		const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
+		const args = process.platform === "win32" ? ["/c", "start", "", link] : [link];
+		try {
+			const child = spawn(command, args, { detached: true, stdio: "ignore" });
+			child.on("error", () => this.showWarning(`Could not open ${link}`));
+			child.unref();
+		} catch {
+			this.showWarning(`Could not open ${link}`);
+		}
+	}
+
 	/** The most-consumed window for the active provider, e.g. `5h 61%`. */
 	private eulerUsageSegment(): { label: string; percent: number } | undefined {
 		if (!this.eulerEnabled()) return undefined;
@@ -7487,6 +7558,8 @@ export class InteractiveMode {
 				...this.eulerSidebarSnapshot,
 				currentPath: this.sessionManager.getSessionFile(),
 				live: this.session.isStreaming,
+				external: this.eulerT3Snapshot.available ? this.eulerT3Rows() : [],
+				externalError: this.eulerT3Snapshot.available ? undefined : this.eulerT3Snapshot.error,
 			}),
 			readHeight: () => this.ui.terminal.rows,
 			readWidth: () => this.ui.terminal.columns,
@@ -7497,6 +7570,10 @@ export class InteractiveMode {
 				this.ui.requestRender();
 			},
 			onOpen: (sessionPath) => this.openEulerThread(sessionPath),
+			onOpenExternal: (thread) => {
+				if (thread.link) this.openExternalLink(thread.link);
+				else this.showWarning("That T3 thread has no link");
+			},
 			onNew: () => {
 				this.closeEulerSidebar();
 				void this.handleClearCommand();
@@ -7558,6 +7635,8 @@ export class InteractiveMode {
 		this.eulerSidebar.selectCurrent();
 		this.ui.setFocus(this.eulerSidebar);
 		this.refreshEulerThreads();
+		void this.refreshEulerT3();
+		this.startEulerT3Timer();
 	}
 
 	private showEulerSidebar(): void {
@@ -7568,6 +7647,8 @@ export class InteractiveMode {
 		}
 		this.ui.setFocus(this.eulerSidebar);
 		this.refreshEulerThreads();
+		void this.refreshEulerT3();
+		this.startEulerT3Timer();
 	}
 
 	private leaveEulerSidebar(): void {
@@ -7585,6 +7666,7 @@ export class InteractiveMode {
 	private closeEulerSidebar(): void {
 		if (!this.eulerSidebarOpen) return;
 		this.eulerSidebarOpen = false;
+		this.stopEulerT3Timer();
 		this.applyEulerLayout();
 		this.restoreEulerFocus();
 		this.ui.requestRender();
@@ -7817,6 +7899,13 @@ export class InteractiveMode {
 			usageSegment: () => this.eulerUsageSegment(),
 			usage: () => this.eulerUsageSnapshot(),
 			contextReport: () => this.eulerContextReport(),
+			t3Start: (message, options) => this.startEulerT3(message, options),
+			t3Send: (threadId, message) => this.sendEulerT3(threadId, message),
+			t3Refresh: () => {
+				void this.refreshEulerT3();
+			},
+			t3Open: (link) => this.openExternalLink(link),
+			t3Snapshot: () => this.eulerT3Snapshot,
 			refreshUsage: () => {
 				void this.ensureEulerUsage().refresh();
 			},

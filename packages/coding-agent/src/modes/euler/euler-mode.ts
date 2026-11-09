@@ -24,6 +24,7 @@ import {
 import { theme } from "../interactive/theme/theme.ts";
 import { BRAND_MARK, brand } from "./euler-look.ts";
 import type { EulerModeName, EulerStatusData } from "./euler-status.ts";
+import { isT3Live, type T3Snapshot, type T3StartOptions, type T3Thread } from "./euler-t3.ts";
 import type { UsageSnapshot, UsageWindow } from "./euler-usage.ts";
 import { compactTokens, until } from "./euler-voice.ts";
 import { EULER_STARTUP_HINT } from "./identity.ts";
@@ -133,6 +134,13 @@ export interface EulerHost {
 	refreshUsage(): void;
 	/** Live context window report for `:context`. */
 	contextReport(): EulerContextReport | undefined;
+	/** Start a background T3 Code thread; returns its id. */
+	t3Start(message: string, options: T3StartOptions): Promise<string>;
+	/** Steer a T3 thread and return the reply (or its terminal status). */
+	t3Send(threadId: string, message: string): Promise<string>;
+	t3Refresh(): void;
+	t3Open(link: string): void;
+	t3Snapshot(): T3Snapshot;
 }
 
 const SCROLL_OFF = 10;
@@ -732,6 +740,10 @@ export class EulerMode {
 
 	private runCommand(raw: string): void {
 		const command = raw.replace(/^\s*:?\s*/, "");
+		if (command === "t3" || command.startsWith("t3 ")) {
+			this.runT3(command.slice(2).trim());
+			return;
+		}
 		switch (command) {
 			case "":
 				return;
@@ -903,6 +915,140 @@ export class EulerMode {
 		content.push(theme.fg("dim", "press any key to close"));
 
 		this.showPopup("keys", () => content, Math.max(24, Math.min(contentWidth + 4, terminalWidth - 4)));
+	}
+
+	/** `:t3` — T3 Code background threads: list, start, steer, open. */
+	private runT3(rest: string): void {
+		const tokens = rest.split(/\s+/).filter(Boolean);
+		const sub = tokens.shift() ?? "";
+		if (sub === "" || sub === "list" || sub === "help") {
+			this.showT3();
+			return;
+		}
+		if (sub === "start") {
+			const options: T3StartOptions = {};
+			const message: string[] = [];
+			for (let index = 0; index < tokens.length; index++) {
+				const token = tokens[index];
+				const value = tokens[index + 1];
+				if (
+					(token === "--worktree" ||
+						token === "--branch" ||
+						token === "--provider" ||
+						token === "--model" ||
+						token === "--title") &&
+					value
+				) {
+					const key = token.slice(2) as keyof T3StartOptions;
+					options[key] = value;
+					index++;
+				} else message.push(token ?? "");
+			}
+			const text = message.join(" ").trim();
+			if (text.length === 0) {
+				this.message = "usage: :t3 start [--worktree ref] [--provider id --model slug] <message>";
+				this.syncCursor();
+				return;
+			}
+			this.message = "starting t3 thread…";
+			this.syncCursor();
+			void this.host
+				.t3Start(text, options)
+				.then((threadId) => {
+					this.host.t3Refresh();
+					this.message = `t3 started · ${threadId.split(":").at(-1)?.slice(0, 8) ?? threadId}`;
+					this.syncCursor();
+				})
+				.catch((error) => {
+					this.message = `t3: ${error instanceof Error ? error.message : String(error)}`;
+					this.syncCursor();
+				});
+			return;
+		}
+		if (sub === "send") {
+			const thread = this.resolveT3Thread(tokens.shift());
+			const text = tokens.join(" ").trim();
+			if (!thread || text.length === 0) {
+				this.message = "usage: :t3 send <n|id> <message>";
+				this.syncCursor();
+				return;
+			}
+			this.message = "t3: sending…";
+			this.syncCursor();
+			void this.host
+				.t3Send(thread.threadId, text)
+				.then((reply) => {
+					this.host.t3Refresh();
+					this.message = `t3 · ${firstLine(reply).slice(0, 70)}`;
+					this.syncCursor();
+				})
+				.catch((error) => {
+					this.message = `t3: ${error instanceof Error ? error.message : String(error)}`;
+					this.syncCursor();
+				});
+			return;
+		}
+		if (sub === "open") {
+			const thread = this.resolveT3Thread(tokens.shift());
+			if (!thread?.link) {
+				this.message = "t3: no link for that thread";
+				this.syncCursor();
+				return;
+			}
+			this.host.t3Open(thread.link);
+			this.message = "t3: opened";
+			this.syncCursor();
+			return;
+		}
+		this.message = `not a t3 command: ${sub}`;
+		this.syncCursor();
+	}
+
+	private resolveT3Thread(target: string | undefined): T3Thread | undefined {
+		if (!target) return undefined;
+		const threads = this.host.t3Snapshot().threads;
+		const index = Number(target);
+		return Number.isInteger(index) && index > 0
+			? threads[index - 1]
+			: threads.find((thread) => thread.threadId === target);
+	}
+
+	private showT3(): void {
+		this.host.t3Refresh();
+		this.showPopup("t3", () => this.t3Lines(), 70);
+	}
+
+	private t3Lines(): string[] {
+		const snapshot = this.host.t3Snapshot();
+		if (!snapshot.available) {
+			return [
+				"",
+				theme.fg("muted", ` ${snapshot.error ?? "t3 unavailable"}`),
+				theme.fg("dim", " install the server: ~/.t3/bin/t3 service install"),
+				"",
+			];
+		}
+		const threads = snapshot.threads;
+		const lines: string[] = [
+			`${theme.bold(theme.fg("text", "T3 Code"))}${theme.fg("dim", ` · ${threads.length} thread${threads.length === 1 ? "" : "s"}`)}`,
+		];
+		if (threads.length === 0) {
+			lines.push("", theme.fg("muted", " no background threads"));
+		}
+		for (const [index, thread] of threads.entries()) {
+			const color = thread.status === "failed" ? "error" : isT3Live(thread.status) ? "success" : "muted";
+			lines.push(
+				"",
+				`${theme.fg("dim", String(index + 1).padStart(2))} ${theme.fg(color, thread.status.padEnd(9))} ${theme.bold(theme.fg("text", thread.title))}`,
+			);
+			const meta = [thread.branch, [thread.provider, thread.model].filter(Boolean).join(" ")]
+				.filter(Boolean)
+				.join(" · ");
+			if (meta.length > 0) lines.push(`   ${theme.fg("dim", meta)}`);
+		}
+		lines.push("", theme.fg("dim", " :t3 start [--worktree ref] [--provider id --model slug] <message>"));
+		lines.push(theme.fg("dim", " :t3 send <n> <message> · :t3 open <n> · Enter in the rail opens"));
+		return lines;
 	}
 
 	/** `:usage` — subscription quota windows in percent, refreshed on open. */

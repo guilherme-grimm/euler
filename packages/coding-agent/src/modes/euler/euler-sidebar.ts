@@ -12,7 +12,20 @@
 import { type Component, type Focusable, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { type ThemeColor, theme } from "../interactive/theme/theme.ts";
 import { BRAND_MARK, brand, spinnerFrame } from "./euler-look.ts";
+import { isT3Live } from "./euler-t3.ts";
 import { threadMeta } from "./euler-voice.ts";
+
+export interface SidebarExternal {
+	threadId: string;
+	title: string;
+	status: string;
+	provider?: string;
+	model?: string;
+	branch?: string;
+	worktreePath?: string;
+	link?: string;
+	updatedAt?: string;
+}
 
 export interface SidebarThread {
 	path: string;
@@ -23,6 +36,8 @@ export interface SidebarThread {
 	messageCount: number;
 	/** Modified after the user last opened it (only within the recent window). */
 	unread?: boolean;
+	/** T3 Code background thread, rendered in the EXTERNAL section. */
+	external?: SidebarExternal;
 }
 
 export interface SidebarRow extends SidebarThread {
@@ -36,6 +51,10 @@ export interface SidebarSnapshot {
 	loading: boolean;
 	/** The current session has a turn in flight. */
 	live?: boolean;
+	/** Background T3 Code threads for this project. */
+	external?: readonly SidebarExternal[];
+	/** Why the T3 probe failed, when it did. */
+	externalError?: string;
 }
 
 /** Two-line rows with metadata, or one dense line per thread. */
@@ -52,6 +71,8 @@ export interface SidebarOptions {
 	density: () => SidebarDensity;
 	onDensity: (density: SidebarDensity) => void;
 	onOpen: (path: string) => void;
+	/** Open a T3 Code thread (browser link). */
+	onOpenExternal: (thread: SidebarExternal) => void;
 	onNew: () => void;
 	onHide: () => void;
 	/** Hand focus back to the transcript while keeping the rail visible. */
@@ -161,11 +182,26 @@ export class EulerSidebar implements Component, Focusable {
 	private visible(all: readonly SidebarRow[]): SidebarRow[] {
 		const cutoff = Date.now() - RECENT_WINDOW_MS;
 		const query = this.query.trim().toLowerCase();
-		const rows = this.searchActive()
+		const local = this.searchActive()
 			? query.length === 0
 				? [...all]
 				: all.filter((row) => oneLine(row.title).toLowerCase().includes(query))
 			: all.filter((row) => row.current || row.modified.getTime() >= cutoff);
+		// External threads bypass the recent window (they are live work), but search still filters them.
+		const external = (this.options.read().external ?? [])
+			.filter((thread) => query.length === 0 || oneLine(thread.title).toLowerCase().includes(query))
+			.map(
+				(thread): SidebarRow => ({
+					path: `t3:${thread.threadId}`,
+					title: thread.title,
+					modified: new Date(thread.updatedAt ?? Date.now()),
+					messageCount: 0,
+					current: false,
+					depth: 0,
+					external: thread,
+				}),
+			);
+		const rows = [...local, ...external];
 		if (this.selected >= rows.length) this.selected = Math.max(0, rows.length - 1);
 		if (this.selected < 0) this.selected = 0;
 		return rows;
@@ -251,7 +287,8 @@ export class EulerSidebar implements Component, Focusable {
 			case "\r":
 			case "\n": {
 				const row = rows[this.selected];
-				if (row && !row.current) this.options.onOpen(row.path);
+				if (row?.external) this.options.onOpenExternal(row.external);
+				else if (row && !row.current) this.options.onOpen(row.path);
 				else this.options.onHide();
 				return;
 			}
@@ -319,22 +356,29 @@ export class EulerSidebar implements Component, Focusable {
 			}
 		};
 
-		const older = all.length > rows.length ? `+${all.length - rows.length} older` : undefined;
-		if (rows.length === 0) {
+		const entries = rows.map((row, index) => ({ row, index }));
+		const externalEntries = entries.filter((entry) => entry.row.external);
+		const localEntries = entries.filter((entry) => !entry.row.external);
+		const older = all.length > localEntries.length ? `+${all.length - localEntries.length} older` : undefined;
+		if (localEntries.length === 0 && externalEntries.length === 0 && !snapshot.externalError) {
 			items.push({ height: 1, offset: 0, lines: [clampLine(this.emptyState(snapshot), inner)] });
 		} else if (this.searchActive()) {
-			section(
-				this.query.length > 0 ? "matches" : "all threads",
-				false,
-				undefined,
-				rows.map((row, index) => ({ row, index })),
-			);
+			section(this.query.length > 0 ? "matches" : "all threads", false, undefined, entries);
 		} else {
-			const entries = rows.map((row, index) => ({ row, index }));
-			const working = entries.filter((entry) => entry.row.current && snapshot.live);
-			const idle = entries.filter((entry) => !working.includes(entry));
+			const working = localEntries.filter((entry) => entry.row.current && snapshot.live);
+			const idle = localEntries.filter((entry) => !working.includes(entry));
 			if (working.length > 0) section("working", true, idle.length === 0 ? older : undefined, working);
 			if (idle.length > 0) section("idle", false, older, idle);
+			if (externalEntries.length > 0) {
+				const externalLive = externalEntries.some((entry) => isT3Live(entry.row.external?.status ?? ""));
+				section("external", externalLive, snapshot.externalError ? "t3" : undefined, externalEntries);
+			} else if (snapshot.externalError) {
+				items.push({
+					height: 1,
+					offset: 0,
+					lines: [clampLine(` ${theme.fg("dim", `t3 · ${snapshot.externalError}`)}`, inner)],
+				});
+			}
 		}
 
 		let offset = 0;
@@ -382,12 +426,59 @@ export class EulerSidebar implements Component, Focusable {
 		];
 	}
 
+	/** External threads: T3 owns status/branch/model; the rail only observes and opens them. */
+	private renderExternalRow(
+		external: SidebarExternal,
+		index: number,
+		options: { inner: number; density: SidebarDensity; now: number },
+	): string[] {
+		const { inner, density, now } = options;
+		const live = isT3Live(external.status);
+		const marker = live
+			? spinnerFrame(now)
+			: external.status === "completed"
+				? "✓"
+				: external.status === "failed"
+					? "✕"
+					: "○";
+		const painted = live
+			? brand(marker)
+			: theme.fg(
+					external.status === "completed" ? "success" : external.status === "failed" ? "error" : "muted",
+					marker,
+				);
+		const title = oneLine(external.title);
+		const selected = this.focused && index === this.selected;
+		const paint = (line: string): string => {
+			const fitted = clampLine(line, inner);
+			return selected ? theme.bg("selectedBg", fitted) : fitted;
+		};
+		const age = relativeAge(new Date(external.updatedAt ?? Date.now()), now);
+		if (density === "compact") {
+			const titleWidth = Math.max(4, inner - 3 - AGE_WIDTH - 1);
+			const head = ` ${painted} ${theme.fg(live ? "text" : "muted", truncateToWidth(title, titleWidth, "…"))}`;
+			const gap = Math.max(1, inner - visibleWidth(head) - AGE_WIDTH);
+			return [paint(`${head}${" ".repeat(gap)}${theme.fg("dim", age.padStart(AGE_WIDTH))}`)];
+		}
+		const meta = [
+			external.status === "failed" ? theme.fg("error", "failed") : "",
+			external.branch ? theme.fg("dim", external.branch) : "",
+			external.model ? theme.fg("dim", [external.provider, external.model].filter(Boolean).join(" ")) : "",
+		].filter(Boolean);
+		meta.push(theme.fg("dim", age));
+		return [
+			paint(` ${painted} ${theme.fg(live ? "text" : "muted", truncateToWidth(title, Math.max(4, inner - 3), "…"))}`),
+			paint(`   ${meta.join(theme.fg("dim", " · "))}`),
+		];
+	}
+
 	/** One thread: a title line plus metadata (comfortable), or a single dense line (compact). */
 	private renderRow(
 		row: SidebarRow,
 		index: number,
 		options: { inner: number; density: SidebarDensity; now: number; live: boolean | undefined },
 	): string[] {
+		if (row.external) return this.renderExternalRow(row.external, index, options);
 		const { inner, density, now } = options;
 		const live = row.current && options.live === true;
 		const marker = live
