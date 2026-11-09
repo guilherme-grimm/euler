@@ -32,19 +32,29 @@ euler --version     # euler 1.5.0
 
 ## Run it
 
+Requires **Node.js 22.19+** (Bun optional) and a POSIX shell for the launcher. Euler is not
+published to npm; install from a checkout:
+
 ```bash
 npm install
 npm run build                       # builds every package and the CLI bundle
-node packages/coding-agent/dist/bundle/cli.js --ui euler
+mkdir -p ~/.local/bin
+ln -sf "$PWD/bin/euler" ~/.local/bin/euler
+euler --version                     # euler 1.5.0
 ```
 
-Link the launcher, which prefers `bun` and falls back to `node`:
-
 ```bash
-ln -s "$PWD/bin/euler" ~/.local/bin/euler
 euler                    # equivalent to: pi --ui euler, run under bun when available
+euler --dev              # source supervisor: restart on save, quiescent (see DOGFOOD.md)
+euler --continue         # resume this directory's last session
 EULER_RUNTIME=node euler # force node
 pi --ui euler            # explicit opt-in; plain `pi` stays stock Pi
+```
+
+The bundle can also be run directly, which is what `--dev` replaces:
+
+```bash
+node packages/coding-agent/dist/bundle/cli.js --ui euler
 ```
 
 Bun starts this configuration in ~250 ms vs ~620 ms on node (TypeScript extensions compile

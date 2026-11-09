@@ -36,17 +36,36 @@ skills, MCP servers, codemode, models and credentials — because it reads the s
 **Pi stays Pi.** `pi` is stock Pi; the modal layer only runs through the `euler` binary (or the
 explicit `pi --ui euler` flag). No environment variable changes what `pi` is.
 
-## Run it
+## Install
+
+Euler is a fork, not an npm package — it installs from a checkout and keeps using Pi's `~/.pi/agent`
+for sessions, auth, skills, extensions and MCP. Requirements: **Node.js 22.19+** (Bun optional) and a
+POSIX shell for the launcher; on native Windows use WSL/Git Bash, or run the bundle directly.
 
 ```bash
+git clone https://github.com/guilherme-grimm/euler.git
+cd euler
 npm install
-npm run build
-ln -s "$PWD/bin/euler" ~/.local/bin/euler
+npm run build                     # every package + the CLI bundle
+
+mkdir -p ~/.local/bin
+ln -sf "$PWD/bin/euler" ~/.local/bin/euler
+euler --version                   # euler 1.5.0
+```
+
+First run: `euler`, then `/login` in the editor to connect a provider (Claude Pro/Max, ChatGPT
+Codex, OpenCode Go, or an API key). The launcher prefers Bun and falls back to Node.
+
+```bash
 euler                       # bun when available, node otherwise
 euler --dev                 # hot reload: source mode, restart on save, session resumed
 euler --continue            # resume this directory's last session
-npm run dev                 # the same supervisor without the launcher
+pi --ui euler               # explicit opt-in; plain `pi` stays stock Pi
+EULER_RUNTIME=node euler    # force node
 ```
+
+Upgrade with `git pull --ff-only && npm install && npm run build`. Uninstall by removing the
+symlink; `npm run clean` drops the build output.
 
 Full guide: [docs/euler/README.md](docs/euler/README.md) — keys, quote/fork model, command line,
 and the architecture seams that keep this fork mergeable.
@@ -55,8 +74,8 @@ and the architecture seams that keep this fork mergeable.
 
 ## Upstream Pi
 
-The rest of this file is Pi's own README, unchanged. Where it says "Pi", read "the harness Euler is
-built on"; where it points at docs, those docs apply here too.
+> The remaining README is upstream Pi's. Its install script (`curl -fsSL https://pi.dev/install.sh |
+> sh`) installs **Pi**, not Euler — use the source install above for Euler.
 
 Pi is a minimal, extensible agent harness that you can make your own.
 
